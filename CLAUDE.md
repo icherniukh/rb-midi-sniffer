@@ -5,6 +5,7 @@ CLI tool that monitors MIDI traffic from Pioneer DJ controllers and displays Rek
 
 ## Key Files
 - `sniffer.py` - Main tool (single file, ~1100 lines)
+- `REKORDBOX-MIDI-CSV-SPEC.md` - Community CSV format specification (reverse-engineered)
 - `references/` - CSV examples and Rekordbox MIDI Learn Guide PDF
 
 ## How It Works
@@ -41,7 +42,10 @@ python sniffer.py list-ports   # Show MIDI ports
 - [ ] Split into separate modules (parser, sniffer, cli)
 - [ ] Change help to `sniffer.py help` convention
 - [ ] Add architecture diagram
-- [ ] Verify imported skills (.claude/skills/) and update if needed - they were copied from another repo and may contain stale file paths or references
+
+## Completed
+- [x] CSV format specification (REKORDBOX-MIDI-CSV-SPEC.md)
+- [x] Verify/update imported skills - fixed stale file paths
 
 ## Dependencies
 - `mido` - MIDI I/O
