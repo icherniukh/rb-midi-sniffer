@@ -91,15 +91,17 @@ Rekordbox CSV files have a specific 15-column structure:
 
 | # | Column Name | Description | Example |
 |---|-------------|-------------|---------|
-| 0 | FunctionName | Rekordbox function identifier | `PlayPause`, `HotCue1` |
-| 1 | DisplayName | Human-readable name | `Play/Pause`, `Hot Cue 1` |
-| 2 | Type | Control type | `Button`, `Rotary`, `KnobSliderHiRes` |
-| 3 | InputMIDI | MIDI IN code (4-digit hex) | `900B`, `B640` |
-| 4-7 | Deck1-4 | Input deck channel assignments | `0`, `1`, `2`, `3` |
-| 8 | OutputMIDI | MIDI OUT code (4-digit hex) | `900B`, `B640` |
-| 9-12 | OutDeck1-4 | Output deck channel assignments | `0`, `1`, `2`, `3` |
-| 13 | Options | Optional flags | `Fast`, `Blink=600`, `RO` |
-| 14 | Comment | User notes | `Play/Pause button` |
+| 0 | #name | Internal identifier (purpose unclear) | `PlayPause`, `#CrossFader` |
+| 1 | function | **Rekordbox function to map** (key column) | `PlayPause`, `Browse+Press` |
+| 2 | type | Control type | `Button`, `Rotary`, `KnobSliderHiRes` |
+| 3 | input | MIDI IN code (4-digit hex) | `900B`, `B640` |
+| 4-7 | deck1-4 | Input deck channel assignments | `0`, `1`, `2`, `3` |
+| 8 | output | MIDI OUT code (4-digit hex) | `900B`, `B640` |
+| 9-12 | deck1-4 | Output deck channel assignments | `0`, `1`, `2`, `3` |
+| 13 | option | Optional flags (semicolon-separated) | `Fast;Priority=50`, `RO` |
+| 14 | comment | Human description | `Play/Pause` |
+
+**Note:** Column 1 (`function`) determines the actual mapping. If empty, the row has no functional mapping. See `REKORDBOX-MIDI-CSV-SPEC.md` for full specification.
 
 ### Special Rows
 
@@ -758,23 +760,16 @@ Type codes from RB_CSV_6.7.4.xml:
 
 ## References
 
-**Official Rekordbox Documentation:**
-- `docs/references/Rekordbox_MIDI_Learn_Guide_v5.3.0.pdf` - Official MIDI Learn operation guide
-- `docs/references/converted/Rekordbox_MIDI_Learn_Guide_v5.3.0.txt` - Text version for quick reference
-- `docs/references/new/RB_CSV_6.7.4.xml` - Complete function reference XML schema (~90 KB)
+**Project Documentation:**
+- `REKORDBOX-MIDI-CSV-SPEC.md` - Community specification (reverse-engineered)
+- `references/Rekordbox_MIDI_Learn_Guide_v5.3.0.pdf` - Official MIDI Learn operation guide
 
-**Real-World Controller Examples:**
-- `docs/references/DDJ-FLX4.midi.csv` - Entry-level 2-deck controller (259 mappings)
-- `docs/references/DDJ-FLX10.midi.csv` - Professional 4-deck controller (567 mappings)
-- `docs/references/DDJ-WeGO4.midi.csv` - Compact portable controller
-- `docs/references/DDJ-GRV6.midi.csv` - Another controller example
-- `docs/references/new/XONE_K2.csv` - XONE:K2 custom mapping (59 lines)
+**Controller CSV Examples:**
+- `references/DDJ-FLX10.midi.csv` - Professional 4-deck controller (567 mappings)
+- `references/DDJ-GRV6.midi.csv` - 2-channel controller (339 mappings)
 
 **Implementation:**
-- `src/csv_parser.py` - Current CSV parser implementation
+- `sniffer.py` - MIDI sniffer with CSV parser (class `RekordboxCSVParser`)
 
-## File Locations
-
-- **CSV Parser**: `src/csv_parser.py`
-- **Sample CSVs**: `docs/references/*.midi.csv`
-- **Specification**: `docs/references/Rekordbox_MIDI_Learn_Guide_v5.3.0.pdf`
+**External Sources:**
+- Rekordbox installation: `/Applications/rekordbox 7/rekordbox.app/Contents/Resources/MidiMappings/`
