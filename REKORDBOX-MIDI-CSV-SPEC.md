@@ -1,0 +1,339 @@
+# Rekordbox MIDI Mapping CSV Specification
+
+Reverse-engineered specification of Rekordbox's MIDI controller mapping CSV format. Based on analysis of files bundled with Rekordbox 7.
+
+**Status**: Draft v1.1
+**Last Updated**: 2024-12-08
+**Sources**: DDJ-FLX10.midi.csv (567 lines), DDJ-GRV6.midi.csv (339 lines)
+
+---
+
+## Quick Reference
+
+| Aspect | Value |
+|--------|-------|
+| Format | CSV, 15 columns |
+| Header | Line 1: `@file,1,ControllerName` |
+| Columns | Line 2: `#name,function,type,input,deck1-4,output,deck1-4,option,comment` |
+| MIDI codes | 4-digit hex: `SSDD` (status byte + data byte) |
+| Key column | Column 1 (`function`) - determines mapped Rekordbox function |
+
+---
+
+## Column Definitions
+
+| Col | Header | Purpose | Required |
+|-----|--------|---------|----------|
+| 0 | `#name` | Internal identifier (see [Column 0 Patterns](#column-0-name-patterns)) | No |
+| 1 | `function` | **Rekordbox function to map** | Yes (if functional row) |
+| 2 | `type` | Control type (Button, Rotary, etc.) | Usually |
+| 3 | `input` | Base MIDI IN code (4-digit hex) | Conditional |
+| 4-7 | `deck1-4` | Input deck assignments | Conditional |
+| 8 | `output` | Base MIDI OUT code (LED feedback) | No |
+| 9-12 | `deck1-4` | Output deck assignments | No |
+| 13 | `option` | Flags (semicolon-separated) | No |
+| 14 | `comment` | Human description | No |
+
+### Column 0 (`#name`) Patterns
+
+Three observed patterns (purpose not officially documented):
+
+| Pattern | Example | Observation |
+|---------|---------|-------------|
+| Matches col 1 | `PlayPause,PlayPause,...` | Most common |
+| Differs from col 1 | `ForwardAndLoad,Browse+Press,...` | Function aliasing? |
+| Hash only | `#,Browse+Press+Shift,...` | Placeholder row |
+
+### Column 1 (`function`) - The Key Column
+
+This column determines what Rekordbox function is mapped. Syntax includes modifiers:
+
+```
+FunctionName
+FunctionName+Shift
+FunctionName+LongPress
+FunctionName+Press
+FunctionName+Shift+LongPress
+```
+
+**If column 1 is empty, the row has no functional mapping** (used as visual separator).
+
+---
+
+## File Structure
+
+### Line 1: File Header
+```csv
+@file,1,DDJ-FLX10
+```
+- Position 0: `@file` (file type marker)
+- Position 1: `1` (format version - always observed as `1`)
+- Position 2: Controller name
+
+### Line 2: Column Headers
+```csv
+#name,function,type,input,deck1,deck2,deck3,deck4,output,deck1,deck2,deck3,deck4,option,comment
+```
+
+### Subsequent Lines: Data Rows
+
+See [Row Types](#row-types).
+
+---
+
+## MIDI Code Format
+
+Codes are 4-digit hexadecimal: `SSDD`
+- `SS` = Status byte (message type + channel)
+- `DD` = Data byte (note number or CC number)
+
+**Status byte**: Upper nibble = message type, lower nibble = channel (0-15)
+
+| Upper Nibble | Message Type |
+|--------------|--------------|
+| `8` | Note Off |
+| `9` | Note On |
+| `B` | Control Change |
+
+**Example**: `900B`
+- `90` = Note On, Channel 0
+- `0B` = Note 11
+
+See [MIDI 1.0 Specification](https://www.midi.org/specifications) for full reference.
+
+---
+
+## Deck Assignment Patterns
+
+### Pattern 1: Base Code + Channel Offsets
+```csv
+PlayPause,PlayPause,Button,900B,0,1,2,3,900B,0,1,2,3,...
+```
+*(DDJ-FLX10.midi.csv:16)*
+
+- `input`: `900B` (base code, Channel 0)
+- `deck1-4`: `0,1,2,3` (channel offsets added to base)
+- Result: Deck 1 = Ch 0, Deck 2 = Ch 1, Deck 3 = Ch 2, Deck 4 = Ch 3
+
+### Pattern 2: Empty Base + Direct MIDI Codes
+```csv
+ForwardAndLoad,Browse+Press,Button,,9646,9647,9648,9649,...
+```
+*(DDJ-FLX10.midi.csv:7)*
+
+- `input`: empty
+- `deck1-4`: Complete MIDI codes per deck
+
+### Pattern 3: Global Control (No Deck Assignment)
+```csv
+Browse,Browse,Rotary,B640,,,,,,,,,,,Browse
+```
+*(DDJ-FLX10.midi.csv:5)*
+
+- `input`: `B640` (Channel 6 = global)
+- `deck1-4`: all empty
+
+### Pattern 4: Non-Sequential Channels
+```csv
+PAD1_PadMode1,PAD1_PadMode1,Pad,9000,7,9,11,13,...
+```
+*(DDJ-FLX10.midi.csv:220)*
+
+- Channels 7, 9, 11, 13 for decks 1-4 (not sequential)
+
+### Pattern 5: Multi-Row Per Function
+```csv
+FXPartSelectVocalOn,,Button,9714,,,,,9714,,,,,,FX PART SELECT VOCAL
+FXPartSelectVocalOn,,Button,9914,,,,,9914,,,,,,FX PART SELECT VOCAL
+FXPartSelectVocalOn,,Button,9B14,,,,,9B14,,,,,,FX PART SELECT VOCAL
+FXPartSelectVocalOn,,Button,9D14,,,,,9D14,,,,,,FX PART SELECT VOCAL
+```
+*(DDJ-GRV6.midi.csv:223-226)*
+
+- Same function repeated on multiple rows
+- Each row has different MIDI code (channels 7, 9, 11, 13)
+- Deck columns empty; channel embedded in MIDI code
+
+---
+
+## Row Types
+
+### Functional Row
+Column 1 contains a valid function name.
+```csv
+PlayPause,PlayPause,Button,900B,0,1,2,3,900B,0,1,2,3,Fast;Priority=50;Dual,Play/Pause
+```
+
+### Section Header
+Column 0 contains section name, column 1 empty.
+```csv
+# Browser,,,,,,,,,,,,,,
+# Deck,,,,,,,,,,,,,,
+```
+
+### Empty Row (Separator)
+```csv
+,,,,,,,,,,,,,,
+```
+
+### Prefixed Rows (`#` in Column 0)
+Rows where column 0 starts with `#` but column 1 has content:
+```csv
+#CrossFader,CrossFader,KnobSliderHiRes,B61F,,,,,,,,,,Fast,Crossfader
+#,Browse+Press+Shift,Button,,9669,966D,966E,966F,,,,,,,No function assigned
+```
+
+**Observed behavior**: These rows appear functional but may be excluded from MIDI Learn UI assignment. Requires further testing.
+
+---
+
+## Control Types
+
+| Type | Description | Notes |
+|------|-------------|-------|
+| `Button` | Momentary switch | Note On/Off |
+| `Pad` | Velocity-sensitive pad | Note On with velocity |
+| `Rotary` | Relative encoder | Values relative to 64 (center) |
+| `Knob` | Absolute knob | 0-127 |
+| `KnobSlider` | Absolute fader | 0-127 |
+| `KnobSliderHiRes` | High-resolution fader | 14-bit (0-16383), uses CC + CC+32 |
+| `JogRotate` | Jog wheel rotation | Continuous |
+| `JogTouch` | Jog wheel touch | On/Off |
+| `JogIndicator` | Jog display feedback | Output only |
+| `Difference` | Position difference | For search/seek |
+| `Indicator` | LED/display feedback | Output only (no input column) |
+| `Value` | Bidirectional data | Settings synchronization |
+| `Parameter` | Internal config | Uses special `FFFx` codes |
+
+---
+
+## Options Field
+
+Semicolon-separated flags in column 13.
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `Fast` | Priority processing | Time-critical controls |
+| `Priority=N` | Priority level (0-100) | `Priority=50` |
+| `Dual` | 4-deck mode support | DDJ-FLX10 |
+| `Blink=N` | LED blink rate (ms) | `Blink=600` |
+| `RO` | Read-only | See note below |
+| `Value=N` | Config value | Used with `Parameter` type |
+| `Min=N` | Minimum value | `Min=1` |
+| `Max=N` | Maximum value | `Max=72` |
+
+**Note on `RO`**: Defined as "read-only / output only" but some rows have both input MIDI codes and `RO` flag (e.g., JogScratch). Exact semantics unclear.
+
+---
+
+## Special Sections
+
+### `# State` Section
+State synchronization messages.
+```csv
+VinylState,VinylState,Button,903A,0,1,2,3,,,,,,RO,LED State of Vinyl buttons
+DeckState,DeckState,Button,903C,0,1,2,3,,,,,,RO,LED State of DECK
+```
+
+### `# illumination` Section
+Hardware settings and LED control. Uses `9Fxx` and `BFxx` codes (Channel 15).
+```csv
+LoadedIndicator,LoadedIndicator,Indicator,,,,,,,9F00,9F01,9F02,9F03,RO;Priority=100,Load illumination
+JogBrightnessSetting,JogBrightnessSetting,Value,BF46,,,,,BF46,,,,,RO;Priority=100,JOG RING brightness
+```
+
+### `# Parameter` Section
+Internal timing configuration. Uses `FFFx` codes (outside standard MIDI range).
+```csv
+JogIndicatorInterval,JogIndicatorInterval,Parameter,FFF1,,,,,,,,,,Value=12,
+MidiOutInterval,MidiOutInterval,Parameter,FFF3,,,,,,,,,,Value=2,
+```
+
+---
+
+## Worked Example
+
+Row from DDJ-FLX10.midi.csv:16:
+```csv
+PlayPause,PlayPause,Button,900B,0,1,2,3,900B,0,1,2,3,Fast;Priority=50;Dual,Play/Pause
+```
+
+| Column | Value | Meaning |
+|--------|-------|---------|
+| 0 `#name` | `PlayPause` | Internal identifier |
+| 1 `function` | `PlayPause` | Maps to Rekordbox PlayPause function |
+| 2 `type` | `Button` | Momentary button control |
+| 3 `input` | `900B` | Base: Note On (0x90), Channel 0, Note 11 |
+| 4-7 `deck1-4` | `0,1,2,3` | Channel offsets → Ch 0,1,2,3 for decks 1-4 |
+| 8 `output` | `900B` | Same as input (LED mirrors button state) |
+| 9-12 `deck1-4` | `0,1,2,3` | Output channels match input |
+| 13 `option` | `Fast;Priority=50;Dual` | High priority, 4-deck support |
+| 14 `comment` | `Play/Pause` | Human description |
+
+**Resulting MIDI mappings**:
+- `900B` (Ch 0, Note 11) → PlayPause Deck 1
+- `910B` (Ch 1, Note 11) → PlayPause Deck 2
+- `920B` (Ch 2, Note 11) → PlayPause Deck 3
+- `930B` (Ch 3, Note 11) → PlayPause Deck 4
+
+---
+
+## Lookup Algorithm
+
+To find a Rekordbox function from a MIDI message:
+
+```
+1. Receive MIDI message (e.g., 0x910B = Note On, Ch 1, Note 11)
+2. Extract: type=note_on, channel=1, note=11
+
+3. Search rows for match:
+   a. Check if input column base + deck offset matches
+      - Base 900B + offset 1 = 910B ✓
+   b. Check if deck column contains full MIDI code
+      - deck2 column = "910B" ✓
+   c. Check multi-row patterns (same function, different MIDI)
+
+4. Return function from column 1
+```
+
+Reference implementation: `sniffer.py` class `RekordboxCSVParser`
+
+---
+
+## Unknown / Needs Verification
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Column 0 purpose | Unknown | Three patterns observed, no documentation |
+| `#` prefix meaning | Unknown | May exclude from MIDI Learn UI |
+| `RO` with input codes | Unclear | Contradicts "output only" definition |
+| `FFFx` codes | Unknown | Internal protocol, not standard MIDI |
+| Format changes across versions | Untested | Rekordbox 6 vs 7 differences unknown |
+
+---
+
+## References
+
+- **Source CSVs**: `/Applications/rekordbox 7/rekordbox.app/Contents/Resources/MidiMappings/`
+- **Parser implementation**: `sniffer.py`
+- **Official guide**: Rekordbox MIDI Learn Guide v5.3.0 (does not document CSV format)
+
+---
+
+## Contributing
+
+Found a pattern we missed? Tested a theory? Please contribute:
+
+1. **Cite your source**: Include CSV filename and line number
+2. **Show your test**: "Pressed X, observed MIDI Y, Rekordbox did Z"
+3. **Mark unknowns**: If guessing, say so clearly
+4. **Add test files**: New controller CSVs welcome in `references/`
+
+We especially need:
+- Testers with XDJ/DJM gear (different MIDI channel conventions)
+- Verification of `#` prefix behavior in MIDI Learn UI
+- Rekordbox 6 CSV comparisons
+
+---
+
+*This specification aids interoperability and community tool development. We encourage users to support official Pioneer DJ hardware and Rekordbox software.*
