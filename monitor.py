@@ -4,6 +4,8 @@ Rekordbox MIDI Sniffer
 Real-time MIDI monitoring with Rekordbox function name display.
 """
 
+import sys
+import time
 import mido
 import click
 from pathlib import Path
@@ -24,7 +26,8 @@ class RekordboxMIDISniffer:
         show_timestamp: bool = True,
         full_row: bool = False,
         columns: Optional[List[str]] = None,
-        use_colors: bool = True
+        use_colors: bool = True,
+        enable_grouping: bool = True
     ):
         self.csv_parser = csv_parser
         self.log_file = log_file
@@ -35,6 +38,14 @@ class RekordboxMIDISniffer:
         self.use_colors = use_colors
         self.log_handle = None
         self.header_printed = False
+
+        # Message grouping state
+        self.enable_grouping = enable_grouping
+        self.current_group: Optional[Dict] = None  # Active grouped message
+        self.group_count: int = 0  # Counter for grouped messages
+        self.last_output_length: int = 0  # Track line length for \r overwrites
+        self.last_display_update: float = 0.0  # Timestamp for throttling updates
+        self.display_throttle_ms: int = 250  # Throttle display updates (prevent flicker)
 
         if log_file:
             try:
@@ -316,6 +327,87 @@ class RekordboxMIDISniffer:
         """Close log file"""
         if self.log_handle:
             self.log_handle.close()
+
+    def _should_group(self, msg: mido.Message, direction: str) -> bool:
+        """
+        Determine if message should be grouped with current group
+
+        Grouping criteria:
+        - Same function name
+        - Same MIDI address (channel, data1)
+        - Same control type
+        - Same deck assignment
+        - Same state for buttons (velocity for note_on/note_off)
+
+        Returns:
+            True if message can be grouped with current_group
+        """
+        if not self.enable_grouping or not self.current_group:
+            return False
+
+        if not self.csv_parser:
+            return False
+
+        func_info = self.csv_parser.lookup_function(msg)
+        if not func_info:
+            return False
+
+        prev_msg = self.current_group['msg']
+        prev_func = self.current_group['func_info']
+
+        # Must match: direction, function, type, deck, MIDI address, velocity (buttons only)
+        if direction != self.current_group['direction']:
+            return False
+        if func_info['function'] != prev_func['function']:
+            return False
+        if func_info.get('type') != prev_func.get('type'):
+            return False
+        # NO jog wheel exclusion - jog wheels are the main use case!
+        if func_info.get('deck') != prev_func.get('deck'):
+            return False
+        if msg.type != prev_msg.type or msg.channel != prev_msg.channel:
+            return False
+
+        if msg.type in ['note_on', 'note_off']:
+            if msg.note != prev_msg.note or msg.velocity != prev_msg.velocity:
+                return False
+        elif msg.type == 'control_change':
+            if msg.control != prev_msg.control:
+                return False
+
+        return True
+
+    def _flush_group(self):
+        """
+        Finalize current group and write to log file
+
+        Called when:
+        - New message doesn't match current group
+        - Monitoring stops (Ctrl+C, port close)
+        """
+        if not self.current_group or self.group_count == 0:
+            return
+
+        # Write grouped message to log file (once, with final counter)
+        if self.log_handle:
+            plain = self.current_group['plain_output']
+
+            # Add counter suffix if > 1
+            if self.group_count > 1:
+                plain += f" x{self.group_count}"
+
+            self.log_handle.write(plain + "\n")
+            self.log_handle.flush()
+
+        # Print newline to finalize console output
+        if self.enable_grouping:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+        # Reset group state
+        self.current_group = None
+        self.group_count = 0
+        self.last_output_length = 0
 
 
 def scan_midi_ports() -> Tuple[List[str], List[str]]:

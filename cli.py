@@ -175,8 +175,29 @@ def monitor(csv_path, input_port, output_port, no_log, log_filename, direction, 
         click.echo(click.style(f"   Press Ctrl+C to stop\n", fg='white', dim=True))
         click.echo("=" * 80)
 
-        with mido.open_input(input_port) as port:
+        # Try IOPort first (bidirectional), fall back to input-only
+        # NOTE: IOPort iteration only yields received messages, not sent
+        # TODO: Implement OUT monitoring via virtual MIDI or threading
+        port = None
+        try:
+            port = mido.open_ioport(input_port)
+            click.echo(click.style("Port mode: Bidirectional port opened", fg='green'))
+            click.echo(click.style("   Note: OUT monitoring requires virtual MIDI routing (see docs)", fg='white', dim=True))
+        except (OSError, IOError):
+            try:
+                port = mido.open_input(input_port)
+                click.echo(click.style("Port mode: Input-only", fg='yellow'))
+                click.echo(click.style("   Tip: For OUT monitoring, setup virtual MIDI routing", fg='white', dim=True))
+            except Exception as fallback_error:
+                click.echo(click.style(f"Error: Cannot open MIDI port: {fallback_error}", fg='red'))
+                sys.exit(1)
+
+        try:
             sniffer.monitor(port, direction="IN")
+        finally:
+            sniffer._flush_group()  # Finalize any active group
+            if port:
+                port.close()
 
     except KeyboardInterrupt:
         click.echo(click.style("\n\nStopped", fg='green'))
