@@ -1,0 +1,5 @@
+@file,1,Supplemental-Mappings
+#name,function,type,input,deck1,deck2,deck3,deck4,output,deck1,deck2,deck3,deck4,option,comment
+#,,,,,,,,,,,,,, === DDJ-GRV6 Undocumented Controls ===
+JogFastSearch,JogFastSearch+Shift,JogRotate,B029,0,1,2,3,,,,,,RO,Fast Track Search (Shift+Jog)
+#,,,,,,,,,,,,,, === Add your custom mappings below ===

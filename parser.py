@@ -156,7 +156,10 @@ class RekordboxCSVParser:
                     if offset_str:
                         try:
                             offset = int(offset_str)
-                            channels_to_map.append((base_channel + offset, i + 1))  # (channel, deck_num)
+                            channel = base_channel + offset
+                            # Validate channel is within MIDI spec (0-15)
+                            if 0 <= channel <= 15:
+                                channels_to_map.append((channel, i + 1))  # (channel, deck_num)
                         except ValueError:
                             pass
             else:

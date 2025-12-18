@@ -364,6 +364,50 @@ Reference implementation: `sniffer.py` class `RekordboxCSVParser`
 
 ---
 
+## Undocumented Controls Found in Practice
+
+The following controls have been observed in actual hardware use but are **not present** in the official Rekordbox CSV mapping files. These may be:
+- Hardware-specific features not yet documented by manufacturer
+- Firmware updates adding new functionality
+- Undocumented modifier combinations
+
+### DDJ-GRV6: Shift+Jog Rotation (CC 41)
+
+**MIDI Code**: `B0 29` (Control Change 41 on Channel 0) + deck offsets
+**Observed Behavior**: When Shift is held and jog wheel is rotated
+**Function**: Fast track search/scan (faster than regular jog pitch bend)
+
+**Details**:
+- Generates high-frequency messages (~2-4ms intervals)
+- Value range: 59-71 (0x3B-0x47), center at 64 (0x40)
+- Values appear to encode rotation speed/direction
+- Not present in DDJ-GRV6.midi.csv despite related controls being documented:
+  - `JogScratch` (B022 / CC 34) ✓ Present
+  - `JogPitchBend` (B023 / CC 35) ✓ Present
+  - `JogTouch+Shift` (9067 / Note 0x67) ✓ Present
+  - `Shift+Jog Rotation` (B029 / CC 41) ✗ Missing
+
+**Test Data**: See `tasks/121825_test_findings/analysis.md` for full analysis (5,007 instances in 81K-line log)
+
+**Suggested CSV Entry**:
+```csv
+JogFastSearch,JogFastSearch+Shift,JogRotate,B029,0,1,2,3,,,,,,RO,Fast Track Search (Shift+Jog)
+```
+
+### DDJ-GRV6: Unknown Channel 6 (Mixer) Controls
+
+Several unrecognized CC messages on Channel 6 (mixer channel):
+- CC 5: 12 instances (various values)
+- CC 12: 12 instances (various values)
+- CC 13: 18 instances (various values)
+- CC 37: 23 instances (various values)
+- CC 44: 13 instances (various values)
+- CC 45: 32 instances (various values)
+
+**Status**: Function unknown - may be effect controls, sampler, or mixer-specific features not in CSV
+
+---
+
 ## References
 
 - **Source CSVs**: `/Applications/rekordbox 7/rekordbox.app/Contents/Resources/MidiMappings/`

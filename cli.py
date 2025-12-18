@@ -25,6 +25,12 @@ from monitor import (
 )
 
 
+# Replay speed limits
+# Maximum playback speed multiplier - prevents excessive CPU usage while still allowing
+# reasonable fast-forward (10x realtime is sufficient for most log analysis)
+MAX_REPLAY_SPEED = 10.0
+
+
 @click.group()
 @click.version_option(version='1.0.0', prog_name='Rekordbox MIDI Sniffer')
 def cli():
@@ -295,7 +301,7 @@ def show_headers(csv_path, input_port):
 @click.option('-f', '--full-row', is_flag=True, help='Show full CSV row (all columns)')
 @click.option('-c', '--columns', 'columns_str', help='Show specific columns (e.g., "function,type" or "0,1,14")')
 @click.option('--no-colors', is_flag=True, help='Disable colors')
-@click.option('--speed', type=click.FloatRange(min=0.0, max=10.0), default=0.0, help='Playback speed multiplier (0=instant, 1=realtime, max=10)')
+@click.option('--speed', type=click.FloatRange(min=0.0, max=MAX_REPLAY_SPEED), default=0.0, help=f'Playback speed multiplier (0=instant, 1=realtime, max={MAX_REPLAY_SPEED:.0f})')
 def replay(logfile, csv_path, full_row, columns_str, no_colors, speed):
     """
     Replay a MIDI log file with function names
