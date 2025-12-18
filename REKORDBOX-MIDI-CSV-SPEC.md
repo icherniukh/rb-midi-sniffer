@@ -1,10 +1,10 @@
 # Rekordbox MIDI Mapping CSV Specification
 
-Reverse-engineered specification of Rekordbox's MIDI controller mapping CSV format. Based on analysis of files bundled with Rekordbox 7.
+Reverse-engineered specification of Rekordbox's MIDI controller mapping CSV format. The official AlphaTheta documentation covers the MIDI Learn UI and workflow, but not the underlying CSV file structure—this spec fills that gap.
 
-**Status**: Draft v1.1
-**Last Updated**: 2024-12-08
-**Sources**: DDJ-FLX10.midi.csv (567 lines), DDJ-GRV6.midi.csv (339 lines)
+**Status**: Draft v1.2
+**Last Updated**: 2024-12-15
+**Sources**: DDJ-FLX10.midi.csv (567 lines), DDJ-GRV6.midi.csv (339 lines), rekordbox7.0.5 MIDI Learn Operation Guide
 
 ---
 
@@ -189,21 +189,46 @@ Rows where column 0 starts with `#` but column 1 has content:
 
 ## Control Types
 
+### Official Types (from MIDI Learn UI)
+
+These are the types shown in Rekordbox's MIDI setting window:
+
+| UI Name | CSV Name | Description |
+|---------|----------|-------------|
+| `Button` | `Button` | Momentary button, Note On/Off |
+| `Button(for Pad)` | `Button` | Button mode for pad hardware |
+| `Pad` | `Pad` | Velocity-sensitive pad, Note On with velocity |
+| `Knob/Slider (0h-7Fh)` | `Knob`, `KnobSlider` | 128-step (7-bit) knob/fader |
+| `Knob/Slider (0h-3FFFh)` | `KnobSliderHiRes` | 16384-step (14-bit) high-resolution fader |
+| `Rotary` | `Rotary` | Relative encoder |
+| `Indicator` | `Indicator` | Output-only LED feedback (cannot learn from input) |
+| `Value` | `Value` | Special type for Needle Search and Velocity Sampler |
+
+### CSV-Only Types (observed in mapping files)
+
 | Type | Description | Notes |
 |------|-------------|-------|
-| `Button` | Momentary switch | Note On/Off |
-| `Pad` | Velocity-sensitive pad | Note On with velocity |
-| `Rotary` | Relative encoder | Values relative to 64 (center) |
-| `Knob` | Absolute knob | 0-127 |
-| `KnobSlider` | Absolute fader | 0-127 |
-| `KnobSliderHiRes` | High-resolution fader | 14-bit (0-16383), uses CC + CC+32 |
 | `JogRotate` | Jog wheel rotation | Continuous |
 | `JogTouch` | Jog wheel touch | On/Off |
 | `JogIndicator` | Jog display feedback | Output only |
 | `Difference` | Position difference | For search/seek |
-| `Indicator` | LED/display feedback | Output only (no input column) |
-| `Value` | Bidirectional data | Settings synchronization |
 | `Parameter` | Internal config | Uses special `FFFx` codes |
+
+### Value Type Details
+
+Per official documentation, the `Value` type serves two purposes:
+
+1. **Needle Search**: Set by sliding finger along ribbon controller
+2. **Velocity Sampler**: For pads that send both Note On and CC simultaneously
+   - MIDI IN format: `Bnxx` where `n` = channel (0-F), `xx` = Data 1 (00-FF)
+   - Cannot be learned by pressing pads; must enter MIDI code directly
+
+### Indicator Type Behavior
+
+The `Indicator` type is output-only:
+- Illumination information sent TO equipment
+- Cannot assign functions by operating equipment
+- Must directly enter MIDI OUT code in the UI
 
 ---
 
@@ -223,6 +248,27 @@ Semicolon-separated flags in column 13.
 | `Max=N` | Maximum value | `Max=72` |
 
 **Note on `RO`**: Defined as "read-only / output only" but some rows have both input MIDI codes and `RO` flag (e.g., JogScratch). Exact semantics unclear.
+
+---
+
+## Function Categories
+
+Rekordbox organizes MIDI-assignable functions into these tabs (per official MIDI Learn UI):
+
+| Tab | Functions |
+|-----|-----------|
+| **DECK** | PlayPause, Cue, Sync, Loop, Tempo, etc. |
+| **PAD** | Hot Cue, Pad Mode, Performance Pads |
+| **FX** | Effect select, Effect parameters |
+| **SAMPLER** | Sampler triggers, volume |
+| **MIXER** | Faders, EQ, filters |
+| **BROWSE** | Library navigation, Load |
+| **OTHER** | Miscellaneous functions |
+| **VIDEO** | Video mode controls |
+| **LIGHTING** | Lighting mode controls |
+| **MIXPOINTLINK** | MixPointLink features |
+
+When using ADD in MIDI Learn, available functions are filtered to the selected tab's category.
 
 ---
 
@@ -310,13 +356,22 @@ Reference implementation: `sniffer.py` class `RekordboxCSVParser`
 | `FFFx` codes | Unknown | Internal protocol, not standard MIDI |
 | Format changes across versions | Untested | Rekordbox 6 vs 7 differences unknown |
 
+### Official Constraints (from MIDI Learn Guide)
+
+- **One MIDI code per function**: The same MIDI code cannot be assigned to multiple functions
+- **MIDI OUT auto-populates**: For functions with indicators (LEDs), MIDI OUT is automatically set to match MIDI IN
+- **Auto-save**: Settings are automatically saved when MIDI setting window is closed
+
 ---
 
 ## References
 
 - **Source CSVs**: `/Applications/rekordbox 7/rekordbox.app/Contents/Resources/MidiMappings/`
-- **Parser implementation**: `sniffer.py`
-- **Official guide**: Rekordbox MIDI Learn Guide v5.3.0 (does not document CSV format)
+- **Parser implementation**: `parser.py` (RekordboxCSVParser)
+- **Official guide**: `references/rekordbox7.0.5_midi_learn_operation_guide_EN.pdf` - AlphaTheta MIDI Learn Operation Guide
+  - Documents MIDI setting UI, control types, and LEARN workflow
+  - Does NOT document CSV file format (which we reverse-engineered)
+- **MIDI 1.0 Spec**: https://www.midi.org/specifications
 
 ---
 

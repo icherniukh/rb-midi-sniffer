@@ -4,9 +4,14 @@
 CLI tool that monitors MIDI traffic from Pioneer DJ controllers and displays Rekordbox function names by parsing Rekordbox's bundled CSV mapping files.
 
 ## Key Files
-- `sniffer.py` - Main tool (single file, ~1100 lines)
+- `sniffer.py` - Entry point (thin wrapper)
+- `csv_parser.py` - CSV parsing (RekordboxCSVParser, CSV discovery)
+- `monitor.py` - MIDI monitoring (RekordboxMIDISniffer, port scanning)
+- `cli.py` - Click CLI commands
 - `REKORDBOX-MIDI-CSV-SPEC.md` - Community CSV format specification (reverse-engineered)
-- `references/` - CSV examples and Rekordbox MIDI Learn Guide PDF
+- `docs/architecture.md` - System architecture diagram
+- `references/` - Official docs and CSV examples:
+  - `rekordbox7.0.5_midi_learn_operation_guide_EN.pdf` - Official AlphaTheta guide (UI/workflow, NOT CSV format)
 
 ## How It Works
 1. Auto-detects connected MIDI controller (e.g., "DDJ-GRV6")
@@ -36,16 +41,30 @@ python sniffer.py monitor      # Live monitoring
 python sniffer.py replay X.log # Replay log file
 python sniffer.py list-csv     # Show available CSVs
 python sniffer.py list-ports   # Show MIDI ports
+python sniffer.py show-headers # Show CSV column headers
+python sniffer.py help         # Show help
 ```
 
 ## Pending Work
-- [ ] Split into separate modules (parser, sniffer, cli)
-- [ ] Change help to `sniffer.py help` convention
-- [ ] Add architecture diagram
+- [ ] See `tasks/120825_issue_audit/issue-analysis.md` for remaining issues from the 33 identified
+- [ ] Consider adding output port monitoring (requires virtual MIDI routing)
 
 ## Completed
 - [x] CSV format specification (REKORDBOX-MIDI-CSV-SPEC.md)
 - [x] Verify/update imported skills - fixed stale file paths
+- [x] Split into separate modules (parser.py, midi_sniffer.py, cli.py)
+- [x] Change help to `sniffer.py help` convention
+- [x] Add architecture diagram (docs/architecture.md)
+- [x] Clarified OUT/IN behavior - DeckState/DeckSelect appear as IN because they ARE input messages from the controller reporting its state (marked with `RO` option in CSV). Added `[Status]` indicator for these read-only/feedback messages
+- [x] Button press vs release indicators - now shows `PRESS` (green) or `release` (red/dim) for button events
+- [x] Colorization improvements:
+  - Hex bytes: status=cyan/magenta, data1=yellow, velocity=green(press)/red(release)
+  - Function names colored by type: cyan=Button, magenta=Rotary/Knobs, yellow=Jog
+  - Control type in blue, comments dimmed, Status indicator in bold yellow
+- [x] Fixed critical log file handle leak (Issue #3)
+- [x] Fixed negative speed validation in replay (Issue #5)
+- [x] Regex case sensitivity already correct in refactored code (Issue #4)
+- [x] Integrated official MIDI Learn Operation Guide - updated CSV spec with official control types, function categories, and constraints
 
 ## Dependencies
 - `mido` - MIDI I/O
