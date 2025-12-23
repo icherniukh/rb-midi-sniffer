@@ -12,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 
-from csv_parser import RekordboxCSVParser
+from parser import RekordboxCSVParser
 
 
 class RekordboxMIDISniffer:
@@ -309,11 +309,43 @@ class RekordboxMIDISniffer:
             self.header_printed = True
 
         colored, plain = self.format_message(msg, direction)
-        print(colored)
 
-        if self.log_handle:
-            self.log_handle.write(plain + "\n")
-            self.log_handle.flush()
+        # Non-grouped mode: print immediately (original behavior)
+        if not self.enable_grouping:
+            print(colored)
+            if self.log_handle:
+                self.log_handle.write(plain + "\n")
+                self.log_handle.flush()
+            return
+
+        # Grouped mode: check if message can be grouped
+        if self._should_group(msg, direction):
+            # Increment counter for this group
+            self.group_count += 1
+
+            # Throttled display update (prevent jog wheel flicker)
+            now = time.time()
+            if now - self.last_display_update >= (self.display_throttle_ms / 1000):
+                self._update_group_display()
+                self.last_display_update = now
+        else:
+            # Flush previous group (if any)
+            self._flush_group()
+
+            # Start new group
+            func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
+            self.current_group = {
+                'msg': msg,
+                'func_info': func_info,
+                'direction': direction,
+                'plain_output': plain,
+                'colored_output': colored
+            }
+            self.group_count = 1
+            self.last_display_update = time.time()
+
+            # Display new group immediately
+            self._update_group_display()
 
     def monitor(self, input_port: mido.ports.BaseInput, direction: str = "IN"):
         """Monitor MIDI port in real-time"""
@@ -327,6 +359,41 @@ class RekordboxMIDISniffer:
         """Close log file"""
         if self.log_handle:
             self.log_handle.close()
+
+    def _update_group_display(self):
+        """
+        Update console with current group count (throttled to prevent flicker)
+
+        Uses \\r (carriage return) to overwrite current line.
+        Shows incrementing counter for grouped messages (e.g., "JogScratch x42")
+        """
+        if not self.current_group:
+            return
+
+        colored = self.current_group['colored_output']
+        plain = self.current_group['plain_output']
+
+        # Add counter suffix if > 1
+        counter_suffix = ""
+        if self.group_count > 1:
+            counter_suffix = f" x{self.group_count}"
+            if self.use_colors:
+                colored += click.style(counter_suffix, fg='white', dim=True)
+            else:
+                colored += counter_suffix
+
+        # Overwrite current line with \r
+        # Use plain text length for accurate padding (colored has ANSI codes)
+        output = f"\r{colored}"
+        output_len = len(plain) + len(counter_suffix)
+
+        if output_len < self.last_output_length:
+            output += " " * (self.last_output_length - output_len)
+
+        sys.stdout.write(output)
+        sys.stdout.flush()
+
+        self.last_output_length = output_len
 
     def _should_group(self, msg: mido.Message, direction: str) -> bool:
         """
@@ -354,6 +421,10 @@ class RekordboxMIDISniffer:
 
         prev_msg = self.current_group['msg']
         prev_func = self.current_group['func_info']
+
+        # If previous message wasn't recognized, can't group
+        if not prev_func:
+            return False
 
         # Must match: direction, function, type, deck, MIDI address, velocity (buttons only)
         if direction != self.current_group['direction']:

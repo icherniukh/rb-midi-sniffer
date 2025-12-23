@@ -12,7 +12,7 @@ import click
 from pathlib import Path
 from datetime import datetime
 
-from csv_parser import (
+from parser import (
     RekordboxCSVParser,
     find_rekordbox_csv_files,
     auto_match_port_to_csv,
@@ -60,7 +60,8 @@ def help(ctx):
 @click.option('-f', '--full-row', is_flag=True, help='Show full CSV row (all columns)')
 @click.option('-c', '--columns', 'columns_str', help='Show specific columns (e.g., "function,type" or "0,1,14")')
 @click.option('--no-colors', is_flag=True, help='Disable colors')
-def monitor(csv_path, input_port, output_port, no_log, log_filename, direction, full_row, columns_str, no_colors):
+@click.option('--no-grouping', is_flag=True, help='Disable message grouping for jog wheels and repeated actions')
+def monitor(csv_path, input_port, output_port, no_log, log_filename, direction, full_row, columns_str, no_colors, no_grouping):
     """
     Monitor MIDI messages in real-time
 
@@ -167,7 +168,8 @@ def monitor(csv_path, input_port, output_port, no_log, log_filename, direction, 
         show_timestamp=True,
         full_row=full_row,
         columns=columns,
-        use_colors=not no_colors
+        use_colors=not no_colors,
+        enable_grouping=not no_grouping
     )
 
     try:
@@ -322,8 +324,9 @@ def show_headers(csv_path, input_port):
 @click.option('-f', '--full-row', is_flag=True, help='Show full CSV row (all columns)')
 @click.option('-c', '--columns', 'columns_str', help='Show specific columns (e.g., "function,type" or "0,1,14")')
 @click.option('--no-colors', is_flag=True, help='Disable colors')
+@click.option('--no-grouping', is_flag=True, help='Disable message grouping for jog wheels and repeated actions')
 @click.option('--speed', type=click.FloatRange(min=0.0, max=MAX_REPLAY_SPEED), default=0.0, help=f'Playback speed multiplier (0=instant, 1=realtime, max={MAX_REPLAY_SPEED:.0f})')
-def replay(logfile, csv_path, full_row, columns_str, no_colors, speed):
+def replay(logfile, csv_path, full_row, columns_str, no_colors, no_grouping, speed):
     """
     Replay a MIDI log file with function names
 
@@ -397,7 +400,8 @@ def replay(logfile, csv_path, full_row, columns_str, no_colors, speed):
         show_timestamp=True,
         full_row=full_row,
         columns=columns,
-        use_colors=not no_colors
+        use_colors=not no_colors,
+        enable_grouping=not no_grouping
     )
 
     click.echo(click.style(f"\nReplaying: ", fg='cyan') + click.style(str(log_path), fg='bright_white', bold=True))
@@ -446,6 +450,8 @@ def replay(logfile, csv_path, full_row, columns_str, no_colors, speed):
 
     except KeyboardInterrupt:
         click.echo(click.style("\n\nStopped", fg='yellow'))
+    finally:
+        sniffer._flush_group()  # Finalize any active group
 
     click.echo(click.style(f"\nReplayed {message_count} messages", fg='green'))
 

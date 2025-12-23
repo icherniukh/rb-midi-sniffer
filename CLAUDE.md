@@ -47,7 +47,6 @@ python sniffer.py help         # Show help
 
 ## Pending Work
 - [ ] See `tasks/120825_issue_audit/issue-analysis.md` for remaining issues from the 33 identified
-- [ ] Consider adding output port monitoring (requires virtual MIDI routing)
 
 ## Completed
 - [x] CSV format specification (REKORDBOX-MIDI-CSV-SPEC.md)
@@ -65,6 +64,12 @@ python sniffer.py help         # Show help
 - [x] Fixed negative speed validation in replay (Issue #5)
 - [x] Regex case sensitivity already correct in refactored code (Issue #4)
 - [x] Integrated official MIDI Learn Operation Guide - updated CSV spec with official control types, function categories, and constraints
+- [x] Message grouping and bidirectional port support:
+  - IOPort support with graceful fallback to input-only
+  - Message grouping for jog wheels and repeated actions (throttled display at 250ms)
+  - --no-grouping CLI flag to disable grouping
+  - Proper Ctrl+C handling to flush groups on exit
+  - Note: OUT monitoring (Rekordbox→controller LED feedback) requires virtual MIDI routing (see tasks/121925_bidirectional_research/)
 
 ## Dependencies
 - `mido` - MIDI I/O
