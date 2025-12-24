@@ -124,30 +124,43 @@ class RekordboxMIDISniffer:
 
     def _midi_to_rgb(self, status: int, data1: int, data2: int) -> Tuple[int, int, int]:
         """
-        Convert MIDI bytes to RGB color with visibility boost for dark terminals
+        Convert MIDI bytes to RGB color with proper normalization
+
+        Each byte is mapped to its full 0-255 range based on expected min/max values:
+        - Status byte: 0x80-0xBF (128-191) for note/CC messages
+        - Data1 (note/CC): 0-127
+        - Data2 (velocity/value): 0-127
 
         Args:
-            status: MIDI status byte (0x80-0xBF typically)
+            status: MIDI status byte (typically 128-191)
             data1: First data byte (0-127)
             data2: Second data byte (0-127)
 
         Returns:
             (R, G, B) tuple with values 0-255
         """
-        # Normalize MIDI range (0-127) to RGB range (0-255)
-        # Use status byte as-is (already in 0-255 range)
-        # Double data bytes to get full RGB range
-        r = status
-        g = data1 * 2
-        b = data2 * 2
+        # Define min/max ranges for each component
+        status_min, status_max = 128, 191  # 0x80-0xBF range
+        data_min, data_max = 0, 127
 
-        # Visibility boost: ensure minimum brightness in dark terminals
-        # If all components are too dark, boost them proportionally
-        min_brightness = 50  # Minimum total brightness
+        # Normalize each component to 0-255 range
+        def normalize(value, vmin, vmax):
+            """Map value from [vmin, vmax] to [0, 255]"""
+            if vmax == vmin:
+                return 0
+            normalized = (value - vmin) / (vmax - vmin)  # 0.0-1.0
+            return int(normalized * 255)  # 0-255
+
+        r = normalize(status, status_min, status_max)
+        g = normalize(data1, data_min, data_max)
+        b = normalize(data2, data_min, data_max)
+
+        # Visibility boost: ensure minimum brightness for dark terminals
+        min_brightness = 80  # Minimum total brightness
         total = r + g + b
 
         if total < min_brightness and total > 0:
-            # Boost all components proportionally to reach minimum brightness
+            # Boost all components proportionally
             boost_factor = min_brightness / total
             r = min(255, int(r * boost_factor))
             g = min(255, int(g * boost_factor))

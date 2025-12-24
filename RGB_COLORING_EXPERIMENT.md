@@ -21,9 +21,23 @@ RGB Mapping:
 Result: RGB(182, 26, 128) → Pinkish-magenta color
 ```
 
-### Normalization
-- **Status byte:** 0x80-0xBF range (128-191) → use as-is (already in RGB range)
-- **Data bytes:** 0-127 range → multiply by 2 to get 0-254
+### Normalization (Improved)
+
+Each byte is mapped to its full 0-255 RGB range based on expected min/max values:
+
+- **Status byte:** 128-191 (0x80-0xBF) → map to 0-255
+  - Formula: `(status - 128) / (191 - 128) * 255 = (status - 128) / 63 * 255`
+  - Example: 0xB6 (182) → ((182-128)/63)*255 = 218
+
+- **Data1 (note/CC):** 0-127 → map to 0-255
+  - Formula: `data1 / 127 * 255`
+  - Example: 13 → (13/127)*255 = 26
+
+- **Data2 (velocity/value):** 0-127 → map to 0-255
+  - Formula: `data2 / 127 * 255`
+  - Example: 64 → (64/127)*255 = 128
+
+This provides **better color distribution** across the full RGB spectrum compared to naive doubling.
 
 ### Visibility Boost
 For very dark colors (low RGB sum), boost all components proportionally:
@@ -38,13 +52,13 @@ This ensures messages like `B0 00 00` don't disappear in dark terminals.
 
 ## Examples
 
-| MIDI Hex | Status | Data1 | Data2 | RGB Color | Visual Effect |
-|----------|--------|-------|-------|-----------|---------------|
-| `B0 00 00` | 176 | 0 | 0 | (176, 0, 0) | Dark red |
-| `B6 0D 40` | 182 | 13 | 64 | (182, 26, 128) | Pinkish-magenta |
-| `B6 2D 64` | 182 | 45 | 100 | (182, 90, 200) | Lighter magenta |
-| `90 3C 7F` | 144 | 60 | 127 | (144, 120, 254) | Purple-blue |
-| `91 7F 7F` | 145 | 127 | 127 | (145, 254, 254) | Cyan-blue |
+| MIDI Hex | Status | Data1 | Data2 | RGB Color (Improved) | Visual Effect |
+|----------|--------|-------|-------|----------------------|---------------|
+| `B0 00 00` | 176 | 0 | 0 | (194, 0, 0) | Bright red |
+| `B6 0D 40` | 182 | 13 | 64 | (218, 26, 128) | Pinkish-magenta |
+| `B6 2D 64` | 182 | 45 | 100 | (218, 90, 200) | Lighter magenta |
+| `90 3C 7F` | 144 | 60 | 127 | (64, 120, 255) | Purple-blue |
+| `91 7F 7F` | 145 | 127 | 127 | (68, 255, 255) | Bright cyan |
 
 ## Observations
 
