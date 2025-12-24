@@ -122,33 +122,68 @@ class RekordboxMIDISniffer:
 
         return " | ".join(parts_colored), " | ".join(parts_plain)
 
+    def _midi_to_rgb(self, status: int, data1: int, data2: int) -> Tuple[int, int, int]:
+        """
+        Convert MIDI bytes to RGB color with visibility boost for dark terminals
+
+        Args:
+            status: MIDI status byte (0x80-0xBF typically)
+            data1: First data byte (0-127)
+            data2: Second data byte (0-127)
+
+        Returns:
+            (R, G, B) tuple with values 0-255
+        """
+        # Normalize MIDI range (0-127) to RGB range (0-255)
+        # Use status byte as-is (already in 0-255 range)
+        # Double data bytes to get full RGB range
+        r = status
+        g = data1 * 2
+        b = data2 * 2
+
+        # Visibility boost: ensure minimum brightness in dark terminals
+        # If all components are too dark, boost them proportionally
+        min_brightness = 50  # Minimum total brightness
+        total = r + g + b
+
+        if total < min_brightness and total > 0:
+            # Boost all components proportionally to reach minimum brightness
+            boost_factor = min_brightness / total
+            r = min(255, int(r * boost_factor))
+            g = min(255, int(g * boost_factor))
+            b = min(255, int(b * boost_factor))
+
+        return (r, g, b)
+
     def _format_hex_bytes(self, msg: mido.Message) -> Tuple[str, str]:
-        """Format MIDI message as hex bytes with strategic coloring"""
+        """Format MIDI message as hex bytes with RGB coloring based on byte values"""
         if msg.type in ['note_on', 'note_off']:
             status = (0x90 if msg.type == 'note_on' else 0x80) | msg.channel
             bytes_list = [f"{status:02X}", f"{msg.note:02X}", f"{msg.velocity:02X}"]
-            # Color: status=cyan, note=yellow, velocity=green/red based on value
+
             if self.use_colors:
-                vel_color = 'green' if msg.velocity > 0 else 'red'
-                colored = (
-                    click.style(bytes_list[0], fg='cyan') + " " +
-                    click.style(bytes_list[1], fg='yellow') + " " +
-                    click.style(bytes_list[2], fg=vel_color)
-                )
+                # Use RGB coloring based on the 3 hex bytes
+                r, g, b = self._midi_to_rgb(status, msg.note, msg.velocity)
+                # ANSI 24-bit RGB color: \033[38;2;R;G;Bm
+                rgb_color = f"\033[38;2;{r};{g};{b}m"
+                reset = "\033[0m"
+                colored = rgb_color + " ".join(bytes_list) + reset
             else:
                 colored = " ".join(bytes_list)
+
         elif msg.type == 'control_change':
             status = 0xB0 | msg.channel
             bytes_list = [f"{status:02X}", f"{msg.control:02X}", f"{msg.value:02X}"]
-            # Color: status=magenta, control=yellow, value=bright_white
+
             if self.use_colors:
-                colored = (
-                    click.style(bytes_list[0], fg='magenta') + " " +
-                    click.style(bytes_list[1], fg='yellow') + " " +
-                    click.style(bytes_list[2], fg='bright_white')
-                )
+                # Use RGB coloring based on the 3 hex bytes
+                r, g, b = self._midi_to_rgb(status, msg.control, msg.value)
+                rgb_color = f"\033[38;2;{r};{g};{b}m"
+                reset = "\033[0m"
+                colored = rgb_color + " ".join(bytes_list) + reset
             else:
                 colored = " ".join(bytes_list)
+
         else:
             plain = str(msg)
             return (click.style(plain, fg='bright_white', bold=True) if self.use_colors else plain), plain
