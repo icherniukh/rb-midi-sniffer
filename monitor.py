@@ -28,7 +28,8 @@ class RekordboxMIDISniffer:
         full_row: bool = False,
         columns: Optional[List[str]] = None,
         use_colors: bool = True,
-        enable_grouping: bool = True
+        enable_grouping: bool = True,
+        use_rgb_hex: bool = True
     ):
         self.csv_parser = csv_parser
         self.log_file = log_file
@@ -37,6 +38,7 @@ class RekordboxMIDISniffer:
         self.full_row = full_row
         self.columns = columns
         self.use_colors = use_colors
+        self.use_rgb_hex = use_rgb_hex
         self.log_handle = None
         self.header_printed = False
 
@@ -169,18 +171,25 @@ class RekordboxMIDISniffer:
         return (r, g, b)
 
     def _format_hex_bytes(self, msg: mido.Message) -> Tuple[str, str]:
-        """Format MIDI message as hex bytes with RGB coloring based on byte values"""
+        """Format MIDI message as hex bytes with RGB or fixed coloring"""
         if msg.type in ['note_on', 'note_off']:
             status = (0x90 if msg.type == 'note_on' else 0x80) | msg.channel
             bytes_list = [f"{status:02X}", f"{msg.note:02X}", f"{msg.velocity:02X}"]
 
             if self.use_colors:
-                # Use RGB coloring based on the 3 hex bytes
-                r, g, b = self._midi_to_rgb(status, msg.note, msg.velocity)
-                # ANSI 24-bit RGB color: \033[38;2;R;G;Bm
-                rgb_color = f"\033[38;2;{r};{g};{b}m"
-                reset = "\033[0m"
-                colored = rgb_color + " ".join(bytes_list) + reset
+                if self.use_rgb_hex:
+                    # Use RGB coloring based on the 3 hex bytes
+                    r, g, b = self._midi_to_rgb(status, msg.note, msg.velocity)
+                    rgb_color = f"\033[38;2;{r};{g};{b}m"
+                    reset = "\033[0m"
+                    colored = rgb_color + " ".join(bytes_list) + reset
+                else:
+                    # Use original fixed colors
+                    status_colored = click.style(bytes_list[0], fg='cyan')
+                    note_colored = click.style(bytes_list[1], fg='yellow')
+                    vel_color = 'green' if msg.velocity > 0 else 'red'
+                    vel_colored = click.style(bytes_list[2], fg=vel_color)
+                    colored = f"{status_colored} {note_colored} {vel_colored}"
             else:
                 colored = " ".join(bytes_list)
 
@@ -189,11 +198,18 @@ class RekordboxMIDISniffer:
             bytes_list = [f"{status:02X}", f"{msg.control:02X}", f"{msg.value:02X}"]
 
             if self.use_colors:
-                # Use RGB coloring based on the 3 hex bytes
-                r, g, b = self._midi_to_rgb(status, msg.control, msg.value)
-                rgb_color = f"\033[38;2;{r};{g};{b}m"
-                reset = "\033[0m"
-                colored = rgb_color + " ".join(bytes_list) + reset
+                if self.use_rgb_hex:
+                    # Use RGB coloring based on the 3 hex bytes
+                    r, g, b = self._midi_to_rgb(status, msg.control, msg.value)
+                    rgb_color = f"\033[38;2;{r};{g};{b}m"
+                    reset = "\033[0m"
+                    colored = rgb_color + " ".join(bytes_list) + reset
+                else:
+                    # Use original fixed colors
+                    status_colored = click.style(bytes_list[0], fg='cyan')
+                    control_colored = click.style(bytes_list[1], fg='yellow')
+                    value_colored = click.style(bytes_list[2], fg='bright_white')
+                    colored = f"{status_colored} {control_colored} {value_colored}"
             else:
                 colored = " ".join(bytes_list)
 
@@ -377,6 +393,21 @@ class RekordboxMIDISniffer:
             self.current_group['plain_output'] = plain
             self.current_group['colored_output'] = colored
 
+            # Track MSB/LSB values for hi-res controls
+            if msg.type == 'control_change':
+                func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
+                if func_info and func_info.get('type') == 'KnobSliderHiRes':
+                    norm_cc = msg.control if msg.control < 32 else msg.control - 32
+                    if 'msb_values' not in self.current_group:
+                        self.current_group['msb_values'] = {}
+                    if 'lsb_values' not in self.current_group:
+                        self.current_group['lsb_values'] = {}
+
+                    if msg.control < 32:
+                        self.current_group['msb_values'][norm_cc] = msg.value
+                    else:
+                        self.current_group['lsb_values'][norm_cc] = msg.value
+
             # Throttled display update (prevent jog wheel flicker)
             now = time.time()
             if now - self.last_display_update >= (self.display_throttle_ms / 1000):
@@ -448,6 +479,7 @@ class RekordboxMIDISniffer:
 
         Uses \\r (carriage return) to overwrite current line.
         Format: "[Status] (x502) val: 59" with color-mapped value
+        For hi-res controls with MSB/LSB, displays combined 14-bit value (0-16383).
         """
         if not self.current_group:
             return
@@ -462,22 +494,31 @@ class RekordboxMIDISniffer:
             colored_cleaned = re.sub(r'\s+val=\d+', '', colored)
             plain_cleaned = re.sub(r'\s+val=\d+', '', plain)
 
+            # Determine if this is a hi-res control with both MSB and LSB
+            func_info = self.current_group.get('func_info')
+            display_value = msg.value
+            max_val = 127
+
+            if func_info and func_info.get('type') == 'KnobSliderHiRes':
+                norm_cc = msg.control if msg.control < 32 else msg.control - 32
+                msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
+                lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
+
+                if norm_cc in self.current_group.get('msb_values', {}) and \
+                   norm_cc in self.current_group.get('lsb_values', {}):
+                    display_value = msb_val * 128 + lsb_val
+                    max_val = 16383
+
             # Build replacement: "(xNNN) val: XX" with color-mapped value
             counter_text = f" (x{self.group_count})"
-            value_text = f" val: {msg.value}"
+            value_text = f" val: {display_value}"
 
-            # Plain text version
             plain_suffix = counter_text + value_text
 
-            # Colored version
             if self.use_colors:
-                # Counter in gray (dimmed)
                 counter_colored = click.style(counter_text, fg='white', dim=True)
-
-                # "val: " in white, value in gradient color (bold)
-                value_color = self._value_to_color(msg.value)
-                value_colored = " val: " + click.style(str(msg.value), fg=value_color, bold=True)
-
+                value_color = self._value_to_color(display_value, 0, max_val)
+                value_colored = " val: " + click.style(str(display_value), fg=value_color, bold=True)
                 colored_suffix = counter_colored + value_colored
             else:
                 colored_suffix = plain_suffix
@@ -486,7 +527,6 @@ class RekordboxMIDISniffer:
             plain_output = plain_cleaned + plain_suffix
 
         else:
-            # No grouping or not control_change - use original output
             colored_output = colored
             plain_output = plain
 
@@ -579,8 +619,22 @@ class RekordboxMIDISniffer:
             if msg.type == 'control_change' and self.group_count > 1:
                 # Remove existing "val=XX"
                 plain = re.sub(r'\s+val=\d+', '', plain)
-                # Add new format
-                plain += f" (x{self.group_count}) val: {msg.value}"
+
+                # Determine if this is a hi-res control with both MSB and LSB
+                func_info = self.current_group.get('func_info')
+                display_value = msg.value
+
+                if func_info and func_info.get('type') == 'KnobSliderHiRes':
+                    norm_cc = msg.control if msg.control < 32 else msg.control - 32
+                    msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
+                    lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
+
+                    if norm_cc in self.current_group.get('msb_values', {}) and \
+                       norm_cc in self.current_group.get('lsb_values', {}):
+                        display_value = msb_val * 128 + lsb_val
+
+                # Add new format with combined value
+                plain += f" (x{self.group_count}) val: {display_value}"
             elif self.group_count > 1:
                 # Non-CC messages (buttons, etc.) - just add counter
                 plain += f" (x{self.group_count})"
