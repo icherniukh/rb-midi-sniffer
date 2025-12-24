@@ -262,11 +262,12 @@ class RekordboxCSVParser:
         """
         Add built-in mappings for common controls not in CSV
 
-        Some controllers don't include Master Level and Booth Level in their
-        MIDI mapping CSV, but these controls do send MIDI and work in Rekordbox.
+        Some controllers don't include hardware mixer controls (Master/Booth Level,
+        Headphones, Mic, etc.) in their MIDI mapping CSV, but these controls do
+        send MIDI and work in Rekordbox.
 
         Controller families use different channels/CCs:
-        - DDJ controllers (GRV6, FLX10, 1000, 800, etc.): Channel 6, CC 8/9
+        - DDJ controllers: Channel 6 (confirmed on DDJ-GRV6, may vary on other models)
         - XDJ all-in-ones (RX2, RX3, RR): Channel 4, CC 24/25
         - DJM mixers (A9, 900NXS2, etc.): Channel 0, CC 24/25
         """
@@ -288,8 +289,11 @@ class RekordboxCSVParser:
         # DDJ controllers (default) use Channel 6
         else:
             builtin_controls = [
+                (6, 5, 'MicLevel', 'Mic Level (built-in)'),
                 (6, 8, 'MasterLevel', 'Master Level (built-in)'),
                 (6, 9, 'BoothLevel', 'Booth Level (built-in)'),
+                (6, 12, 'CueMasterMix', 'Cue/Master Mix (built-in)'),
+                (6, 13, 'HeadphonesLevel', 'Headphones Level (built-in)'),
             ]
 
         for channel, cc, function_name, comment in builtin_controls:

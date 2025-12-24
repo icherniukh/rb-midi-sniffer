@@ -6,6 +6,7 @@ Real-time MIDI monitoring with Rekordbox function name display.
 
 import sys
 import time
+import re
 import mido
 import click
 from pathlib import Path
@@ -323,6 +324,11 @@ class RekordboxMIDISniffer:
             # Increment counter for this group
             self.group_count += 1
 
+            # Update latest message in group (for final value display)
+            self.current_group['msg'] = msg
+            self.current_group['plain_output'] = plain
+            self.current_group['colored_output'] = colored
+
             # Throttled display update (prevent jog wheel flicker)
             now = time.time()
             if now - self.last_display_update >= (self.display_throttle_ms / 1000):
@@ -360,32 +366,85 @@ class RekordboxMIDISniffer:
         if self.log_handle:
             self.log_handle.close()
 
+    def _value_to_color(self, value: int, min_val: int = 0, max_val: int = 127) -> str:
+        """
+        Map MIDI value to color gradient: green → cyan → blue → magenta → red
+
+        Args:
+            value: MIDI value (typically 0-127)
+            min_val: Minimum value in range
+            max_val: Maximum value in range
+
+        Returns:
+            Color name for click.style()
+        """
+        # Normalize to 0-1 range
+        normalized = (value - min_val) / (max_val - min_val) if max_val > min_val else 0
+        normalized = max(0.0, min(1.0, normalized))  # Clamp to 0-1
+
+        # Map to color gradient (0=green, 1=red)
+        if normalized < 0.2:  # 0-25: green (low)
+            return 'green'
+        elif normalized < 0.4:  # 26-51: cyan (low-mid)
+            return 'cyan'
+        elif normalized < 0.6:  # 52-76: blue (mid)
+            return 'blue'
+        elif normalized < 0.8:  # 77-102: magenta (mid-high)
+            return 'magenta'
+        else:  # 103-127: red (high)
+            return 'red'
+
     def _update_group_display(self):
         """
         Update console with current group count (throttled to prevent flicker)
 
         Uses \\r (carriage return) to overwrite current line.
-        Shows incrementing counter for grouped messages (e.g., "JogScratch x42")
+        Format: "[Status] (x502) val: 59" with color-mapped value
         """
         if not self.current_group:
             return
 
         colored = self.current_group['colored_output']
         plain = self.current_group['plain_output']
+        msg = self.current_group['msg']
 
-        # Add counter suffix if > 1
-        counter_suffix = ""
-        if self.group_count > 1:
-            counter_suffix = f" x{self.group_count}"
+        # For control_change messages with grouping, replace "val=XX" format
+        if msg.type == 'control_change' and self.group_count > 1:
+            # Remove "val=XX" from base output (we'll replace it)
+            colored_cleaned = re.sub(r'\s+val=\d+', '', colored)
+            plain_cleaned = re.sub(r'\s+val=\d+', '', plain)
+
+            # Build replacement: "(xNNN) val: XX" with color-mapped value
+            counter_text = f" (x{self.group_count})"
+            value_text = f" val: {msg.value}"
+
+            # Plain text version
+            plain_suffix = counter_text + value_text
+
+            # Colored version
             if self.use_colors:
-                colored += click.style(counter_suffix, fg='white', dim=True)
+                # Counter in gray (dimmed)
+                counter_colored = click.style(counter_text, fg='white', dim=True)
+
+                # "val: " in white, value in gradient color (bold)
+                value_color = self._value_to_color(msg.value)
+                value_colored = " val: " + click.style(str(msg.value), fg=value_color, bold=True)
+
+                colored_suffix = counter_colored + value_colored
             else:
-                colored += counter_suffix
+                colored_suffix = plain_suffix
+
+            colored_output = colored_cleaned + colored_suffix
+            plain_output = plain_cleaned + plain_suffix
+
+        else:
+            # No grouping or not control_change - use original output
+            colored_output = colored
+            plain_output = plain
 
         # Overwrite current line with \r
-        # Use plain text length for accurate padding (colored has ANSI codes)
-        output = f"\r{colored}"
-        output_len = len(plain) + len(counter_suffix)
+        output = f"\r{colored_output}"
+        output_len = len(plain_output)
 
         if output_len < self.last_output_length:
             output += " " * (self.last_output_length - output_len)
@@ -443,7 +502,11 @@ class RekordboxMIDISniffer:
             if msg.note != prev_msg.note or msg.velocity != prev_msg.velocity:
                 return False
         elif msg.type == 'control_change':
-            if msg.control != prev_msg.control:
+            # Normalize LSB (CC 32-63) to MSB (CC 0-31) for hi-res controls
+            # This allows MSB and LSB messages to group together
+            curr_control = msg.control if msg.control < 32 else msg.control - 32
+            prev_control = prev_msg.control if prev_msg.control < 32 else prev_msg.control - 32
+            if curr_control != prev_control:
                 return False
 
         return True
@@ -459,13 +522,20 @@ class RekordboxMIDISniffer:
         if not self.current_group or self.group_count == 0:
             return
 
-        # Write grouped message to log file (once, with final counter)
+        # Write grouped message to log file (once, with final counter and value)
         if self.log_handle:
             plain = self.current_group['plain_output']
+            msg = self.current_group['msg']
 
-            # Add counter suffix if > 1
-            if self.group_count > 1:
-                plain += f" x{self.group_count}"
+            # For control_change with grouping, use new format: "(xNNN) val: XX"
+            if msg.type == 'control_change' and self.group_count > 1:
+                # Remove existing "val=XX"
+                plain = re.sub(r'\s+val=\d+', '', plain)
+                # Add new format
+                plain += f" (x{self.group_count}) val: {msg.value}"
+            elif self.group_count > 1:
+                # Non-CC messages (buttons, etc.) - just add counter
+                plain += f" (x{self.group_count})"
 
             self.log_handle.write(plain + "\n")
             self.log_handle.flush()

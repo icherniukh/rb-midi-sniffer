@@ -30,10 +30,15 @@ PlayPause,PlayPause,Button,900B,0,1,2,3,900B,0,1,2,3,Fast,Play/Pause
 - Two patterns: (1) base + offsets, (2) empty input + full MIDI in deck columns
 
 ## Controller Family Detection
-Built-in mappings for Master/Booth Level vary by family:
-- DDJ controllers: Channel 6, CC 8/9
-- XDJ all-in-ones: Channel 4, CC 24/25
-- DJM mixers: Channel 0, CC 24/25
+Built-in mappings for hardware controls (not in CSV) vary by family:
+- DDJ controllers: Channel 6
+  - CC 5: Mic Level
+  - CC 8: Master Level
+  - CC 9: Booth Level
+  - CC 12: Cue/Master Mix
+  - CC 13: Headphones Level
+- XDJ all-in-ones: Channel 4, CC 24/25 (Master/Booth only)
+- DJM mixers: Channel 0, CC 24/25 (Master/Booth only)
 
 ## Commands
 ```bash
@@ -70,6 +75,11 @@ python sniffer.py help         # Show help
   - --no-grouping CLI flag to disable grouping
   - Proper Ctrl+C handling to flush groups on exit
   - Note: OUT monitoring (Rekordbox→controller LED feedback) requires virtual MIDI routing (see tasks/121925_bidirectional_research/)
+- [x] Grouping improvements (tasks/231225_grouping_visibility/):
+  - Fixed MSB/LSB grouping for hi-res controls (ChannelFader, CrossFader, etc.)
+  - Value-based color gradient: green (0) → cyan → blue → magenta → red (127)
+  - Clean display format: `(x502) val: 59` with gray counter, bold colored value
+  - Discovered and mapped undocumented controls: MicLevel, HeadphonesLevel, CueMasterMix
 
 ## Dependencies
 - `mido` - MIDI I/O
