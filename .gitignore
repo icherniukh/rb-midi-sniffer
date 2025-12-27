@@ -237,3 +237,4 @@ tasks/
 
 # VS Code workspace settings (optional - uncomment if needed)
 # .vscode/
+.claude-sessions

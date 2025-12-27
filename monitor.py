@@ -72,9 +72,12 @@ class RekordboxMIDISniffer:
         self.log_handle.write(f"{'='*80}\n\n")
         self.log_handle.flush()
 
-    def format_message(self, msg: mido.Message, direction: str = "IN") -> Tuple[str, str]:
+    def format_message(self, msg: mido.Message, direction: str = "IN", func_info: dict = None) -> Tuple[str, str]:
         """
         Format MIDI message with hex bytes and function name
+
+        Args:
+            func_info: Cached CSV lookup result to avoid redundant lookups
 
         Returns:
             Tuple of (colored_output, plain_output)
@@ -118,7 +121,7 @@ class RekordboxMIDISniffer:
         else:
             # Skip adding val=XX for control_change when grouping (we'll add it properly in _flush_group)
             skip_value = self.enable_grouping and msg.type == 'control_change'
-            func_str_colored, func_str_plain = self._format_function(msg, skip_value=skip_value)
+            func_str_colored, func_str_plain = self._format_function(msg, skip_value=skip_value, func_info=func_info)
 
         parts_colored.append(func_str_colored)
         parts_plain.append(func_str_plain)
@@ -221,17 +224,19 @@ class RekordboxMIDISniffer:
         plain = " ".join(bytes_list)
         return colored, plain
 
-    def _format_function(self, msg: mido.Message, skip_value: bool = False) -> Tuple[str, str]:
+    def _format_function(self, msg: mido.Message, skip_value: bool = False, func_info: dict = None) -> Tuple[str, str]:
         """Format Rekordbox function name with details
 
         Args:
             skip_value: If True, don't include val=XX (for grouped messages)
+            func_info: Cached CSV lookup result to avoid redundant lookups
         """
         if not self.csv_parser:
             raw = self._format_raw_message(msg)
             return (click.style(raw, fg='white', dim=True) if self.use_colors else raw), raw
 
-        func_info = self.csv_parser.lookup_function(msg)
+        if func_info is None:
+            func_info = self.csv_parser.lookup_function(msg)
 
         if not func_info:
             raw = self._format_raw_message(msg)
@@ -382,14 +387,16 @@ class RekordboxMIDISniffer:
                 self.log_handle.flush()
             self.header_printed = True
 
+        # Cache CSV lookup ONCE per message (was 4-5 lookups before)
+        func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
+
         # For hi-res controls: check if this is an LSB message (skip printing)
         is_lsb_hires = False
-        if self.csv_parser and msg.type == 'control_change' and 32 <= msg.control <= 63:
-            func_info = self.csv_parser.lookup_function(msg)
-            if func_info and func_info.get('type') == 'KnobSliderHiRes':
+        if func_info and msg.type == 'control_change' and 32 <= msg.control <= 63:
+            if func_info.get('type') == 'KnobSliderHiRes':
                 is_lsb_hires = True
 
-        colored, plain = self.format_message(msg, direction)
+        colored, plain = self.format_message(msg, direction, func_info=func_info)
 
         # Non-grouped mode: print immediately (original behavior)
         if not self.enable_grouping:
@@ -410,7 +417,7 @@ class RekordboxMIDISniffer:
             self._flush_group()
 
         # Check if message can be grouped with current group
-        if self._should_group(msg, direction):
+        if self._should_group(msg, direction, func_info=func_info):
             # Add to current group
             self.group_count += 1
             self.current_group['msg'] = msg
@@ -419,7 +426,6 @@ class RekordboxMIDISniffer:
 
             # Track MSB/LSB values for hi-res controls
             if msg.type == 'control_change':
-                func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
                 if func_info and func_info.get('type') == 'KnobSliderHiRes':
                     norm_cc = msg.control if msg.control < 32 else msg.control - 32
                     if 'msb_values' not in self.current_group:
@@ -437,7 +443,6 @@ class RekordboxMIDISniffer:
 
             # Handle LSB messages - create pending group if none exists
             if is_lsb_hires:
-                func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
                 if func_info and func_info.get('type') == 'KnobSliderHiRes':
                     norm_cc = msg.control if msg.control < 32 else msg.control - 32
 
@@ -462,7 +467,6 @@ class RekordboxMIDISniffer:
                 return
 
             # Start new group
-            func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
             self.current_group = {
                 'msg': msg,
                 'func_info': func_info,
@@ -518,7 +522,7 @@ class RekordboxMIDISniffer:
         else:  # 103-127: red (high)
             return 'red'
 
-    def _should_group(self, msg: mido.Message, direction: str) -> bool:
+    def _should_group(self, msg: mido.Message, direction: str, func_info: dict = None) -> bool:
         """
         Determine if message should be grouped with current group
 
@@ -529,6 +533,9 @@ class RekordboxMIDISniffer:
         - Same deck assignment
         - Same state for buttons (velocity for note_on/note_off)
 
+        Args:
+            func_info: Cached CSV lookup result to avoid redundant lookups
+
         Returns:
             True if message can be grouped with current_group
         """
@@ -538,7 +545,8 @@ class RekordboxMIDISniffer:
         if not self.csv_parser:
             return False
 
-        func_info = self.csv_parser.lookup_function(msg)
+        if func_info is None:
+            func_info = self.csv_parser.lookup_function(msg)
         if not func_info:
             return False
 
