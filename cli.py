@@ -460,5 +460,308 @@ def replay(logfile, csv_path, full_row, columns_str, no_colors, no_grouping, no_
     click.echo(click.style(f"\nReplayed {message_count} messages", fg='green'))
 
 
+@cli.command('test')
+@click.option('--duration', 'duration', type=int, default=10, help='Test duration in seconds')
+@click.option('--csv', 'csv_path', type=click.Path(exists=True), help='Path to Rekordbox CSV file')
+@click.option('--no-colors', is_flag=True, help='Disable colors')
+@click.option('--no-grouping', is_flag=True, help='Disable message grouping')
+@click.option('--no-rgbmidi', is_flag=True, help='Disable RGB hex coloring')
+@click.option('--direct', is_flag=True, help='Use direct message injection (no virtual port needed)')
+def test_command(duration, csv_path, no_colors, no_grouping, no_rgbmidi, direct):
+    """
+    Run virtual controller test (emulates DDJ controller without hardware)
+
+    Creates a virtual MIDI port and sends test messages, or uses direct injection
+    if virtual ports aren't available. Useful for testing without actual hardware.
+
+    Examples:
+
+        # Run 10 second test with auto-detected CSV
+        python sniffer.py test
+
+        # Run 30 second test
+        python sniffer.py test --duration 30
+
+        # Test with specific CSV
+        python sniffer.py test --csv DDJ-FLX10.midi.csv
+
+        # Force direct injection mode (no virtual port)
+        python sniffer.py test --direct
+    """
+    # Try to load CSV
+    csv_parser = None
+    if csv_path:
+        csv_parser = RekordboxCSVParser(Path(csv_path))
+        click.echo(click.style("Loaded CSV: ", fg='green') + click.style(csv_parser.controller_name, fg='bright_white', bold=True))
+    else:
+        csv_files = find_rekordbox_csv_files()
+        if csv_files:
+            # Try to find a DDJ CSV
+            for csv_file in csv_files:
+                if 'DDJ' in csv_file.name.upper():
+                    csv_parser = RekordboxCSVParser(csv_file)
+                    click.echo(click.style("Auto-loaded CSV: ", fg='green') + click.style(csv_parser.controller_name, fg='bright_white', bold=True))
+                    break
+
+    if csv_parser:
+        click.echo(f"   Functions mapped: {len(csv_parser.midi_to_function)}")
+    else:
+        click.echo(click.style("Warning: No CSV loaded. Showing raw MIDI only.", fg='yellow'))
+
+    click.echo()
+    click.echo(click.style("Creating virtual DDJ controller...", fg='cyan'))
+    click.echo(click.style(f"Sending test messages for {duration} seconds...", fg='white', dim=True))
+    click.echo(click.style("   Press Ctrl+C to stop early\n", fg='white', dim=True))
+    click.echo("=" * 80)
+
+    # Create virtual controller in a background thread
+    import threading
+
+    controller_thread = None
+    try:
+        # Create virtual controller
+        virtual_controller = VirtualController()
+
+        # Try virtual port mode first (unless --direct is specified)
+        if not direct:
+            try:
+                # Start the controller in background thread
+                def run_controller():
+                    virtual_controller.run_test(duration, csv_parser)
+
+                controller_thread = threading.Thread(target=run_controller, daemon=True)
+                controller_thread.start()
+
+                # Create sniffer to monitor the virtual port
+                sniffer = RekordboxMIDISniffer(
+                    csv_parser=csv_parser,
+                    log_file=None,
+                    show_hex=True,
+                    show_timestamp=True,
+                    full_row=False,
+                    columns=None,
+                    use_colors=not no_colors,
+                    enable_grouping=not no_grouping,
+                    use_rgb_hex=not no_rgbmidi
+                )
+
+                # Open the virtual port for input
+                port_name = virtual_controller.get_port_name()
+                port = mido.open_input(port_name)
+
+                # Monitor
+                sniffer.monitor(port, direction="IN")
+
+            except KeyboardInterrupt:
+                click.echo(click.style("\n\nTest stopped", fg='green'))
+            except Exception as e:
+                # Fall through to direct injection mode
+                if "no ports available" in str(e).lower() or "virtual" in str(e).lower():
+                    click.echo(click.style(f"\nVirtual port not available, switching to direct injection mode...", fg='yellow'))
+                    direct = True
+                else:
+                    raise
+
+        # Direct injection mode (fallback)
+        if direct:
+            _run_direct_injection_test(duration, csv_parser, not no_colors, not no_grouping, not no_rgbmidi)
+
+    except KeyboardInterrupt:
+        click.echo(click.style("\n\nTest stopped", fg='green'))
+    except Exception as e:
+        click.echo(click.style(f"\nError: {e}", fg='red'))
+        click.echo(click.style("Note: Virtual ports require compatible mido backend.", fg='yellow'))
+        click.echo(click.style("Try: pip install python-rtmidi or use --direct flag", fg='yellow'))
+        sys.exit(1)
+    finally:
+        if controller_thread and controller_thread.is_alive():
+            virtual_controller.stop()
+        if 'port' in locals():
+            port.close()
+
+
+def _run_direct_injection_test(duration, csv_parser, use_colors, enable_grouping, use_rgb_hex):
+    """
+    Direct message injection mode - doesn't require virtual MIDI ports
+
+    Creates mido.Message objects directly and passes them to the sniffer.
+    """
+    # Create sniffer
+    sniffer = RekordboxMIDISniffer(
+        csv_parser=csv_parser,
+        log_file=None,
+        show_hex=True,
+        show_timestamp=True,
+        full_row=False,
+        columns=None,
+        use_colors=use_colors,
+        enable_grouping=enable_grouping,
+        use_rgb_hex=use_rgb_hex
+    )
+
+    click.echo(click.style("[Direct Injection Mode]", fg='cyan', dim=True))
+    click.echo("=" * 80)
+
+    start_time = time.time()
+    message_count = 0
+
+    # Test message sequences
+    test_messages = [
+        # Play button press/release
+        mido.Message('note_on', channel=0, note=0x0B, velocity=127),  # Press
+        mido.Message('note_off', channel=0, note=0x0B, velocity=0),    # Release
+
+        # Cue button
+        mido.Message('note_on', channel=0, note=0x0C, velocity=127),
+        mido.Message('note_off', channel=0, note=0x0C, velocity=0),
+
+        # Sync button
+        mido.Message('note_on', channel=0, note=0x0E, velocity=127),
+        mido.Message('note_off', channel=0, note=0x0E, velocity=0),
+
+        # Hot Cue 1
+        mido.Message('note_on', channel=0, note=0x10, velocity=127),
+        mido.Message('note_off', channel=0, note=0x10, velocity=0),
+
+        # Hot Cue 2
+        mido.Message('note_on', channel=0, note=0x11, velocity=127),
+        mido.Message('note_off', channel=0, note=0x11, velocity=0),
+    ]
+
+    try:
+        while (time.time() - start_time) < duration:
+            # Send button sequences
+            for msg in test_messages:
+                if (time.time() - start_time) >= duration:
+                    break
+                sniffer.print_message(msg, direction="IN")
+                message_count += 1
+                time.sleep(0.1)
+
+            # Send CC messages with varying values
+            cc_params = [
+                (4, 64),   # Gain knob
+                (7, 100),  # High EQ
+                (11, 50),  # Mid EQ
+                (15, 75),  # Low EQ
+                (19, 90),  # Channel Fader MSB
+                (51, 45),  # Channel Fader LSB
+            ]
+
+            for cc, base_val in cc_params:
+                if (time.time() - start_time) >= duration:
+                    break
+                val = (base_val + int((time.time() * 10) % 20)) % 128
+                msg = mido.Message('control_change', channel=0, control=cc, value=val)
+                sniffer.print_message(msg, direction="IN")
+                message_count += 1
+                time.sleep(0.05)
+
+            time.sleep(0.5)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sniffer._flush_group()
+
+
+class VirtualController:
+    """
+    Virtual DDJ controller for testing
+
+    Creates a virtual MIDI port and sends test messages emulating
+    common DDJ controller behavior.
+    """
+
+    def __init__(self, port_name="DDJ-Virtual Test"):
+        self.port_name = port_name
+        self.running = False
+        self._port = None
+
+    def get_port_name(self):
+        return self.port_name
+
+    def stop(self):
+        self.running = False
+
+    def run_test(self, duration, csv_parser):
+        """Send test MIDI messages for specified duration"""
+        self.running = True
+
+        try:
+            self._port = mido.open_output(self.port_name, virtual=True)
+        except Exception as e:
+            click.echo(click.style(f"Could not create virtual port: {e}", fg='red'))
+            return
+
+        start_time = time.time()
+        message_count = 0
+
+        # Test message sequences (status, data1, data2)
+        # Emulating DDJ-FLX10/DDJ-GRV6 style messages on Channel 0
+        test_sequences = [
+            # Play button press/release
+            [0x90, 0x0B, 0x7F],  # Note On, Ch 0, Note 11, Vel 127 (Press)
+            [0x80, 0x0B, 0x00],  # Note Off, Ch 0, Note 11 (Release)
+
+            # Cue button
+            [0x90, 0x0C, 0x7F],  # Press
+            [0x80, 0x0C, 0x00],  # Release
+
+            # Sync button
+            [0x90, 0x0E, 0x7F],  # Press
+            [0x80, 0x0E, 0x00],  # Release
+
+            # Hot Cue 1 (Pad)
+            [0x90, 0x10, 0x7F],  # Press
+            [0x80, 0x10, 0x00],  # Release
+
+            # Hot Cue 2
+            [0x90, 0x11, 0x7F],  # Press
+            [0x80, 0x11, 0x00],  # Release
+        ]
+
+        # CC messages (knobs, faders)
+        cc_messages = [
+            (0xB0, 0x04, 64),   # Gain knob (Ch 0, CC 4, val 64)
+            (0xB0, 0x07, 100),  # High EQ (Ch 0, CC 7)
+            (0xB0, 0x0B, 50),   # Mid EQ (Ch 0, CC 11)
+            (0xB0, 0x0F, 75),   # Low EQ (Ch 0, CC 15)
+            (0xB0, 0x13, 90),   # Channel Fader MSB (Ch 0, CC 19)
+            (0xB0, 0x33, 45),   # Channel Fader LSB (Ch 0, CC 51)
+        ]
+
+        try:
+            while self.running and (time.time() - start_time) < duration:
+                # Send button sequences
+                for seq in test_sequences:
+                    if not self.running:
+                        break
+                    msg = mido.Message.from_bytes(seq)
+                    self._port.send(msg)
+                    message_count += 1
+                    time.sleep(0.1)
+
+                # Send CC messages with varying values
+                for status, cc, base_val in cc_messages:
+                    if not self.running:
+                        break
+                    # Vary the value slightly
+                    val = (base_val + int((time.time() * 10) % 20)) % 128
+                    msg = mido.Message('control_change', channel=0, control=cc, value=val)
+                    self._port.send(msg)
+                    message_count += 1
+                    time.sleep(0.05)
+
+                # Small pause between cycles
+                time.sleep(0.5)
+
+        except Exception as e:
+            click.echo(click.style(f"\nVirtual controller error: {e}", fg='red'))
+        finally:
+            if self._port:
+                self._port.close()
+
+
 if __name__ == '__main__':
     cli()

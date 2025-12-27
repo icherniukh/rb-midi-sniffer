@@ -253,11 +253,15 @@ class RekordboxMIDISniffer:
         parts_plain.append(func_name)
         parts_colored.append(click.style(func_name, fg=func_color, bold=True) if self.use_colors else func_name)
 
-        # Add comment if available
-        if func_info.get('comment'):
-            comment_str = f"({func_info['comment']})"
-            parts_plain.append(comment_str)
-            parts_colored.append(click.style(comment_str, fg='white', dim=True) if self.use_colors else comment_str)
+        # Add comment if available (strip "(LSB)" suffix for cleaner display)
+        comment = func_info.get('comment', '')
+        if comment:
+            # Remove "(LSB)" suffix - LSB messages are handled internally
+            comment = comment.replace(' (LSB)', '').replace('(LSB)', '')
+            if comment:
+                comment_str = f"({comment})"
+                parts_plain.append(comment_str)
+                parts_colored.append(click.style(comment_str, fg='white', dim=True) if self.use_colors else comment_str)
 
         # Add control type in brackets
         if control_type:
@@ -373,10 +377,20 @@ class RekordboxMIDISniffer:
                 self.log_handle.flush()
             self.header_printed = True
 
+        # For hi-res controls: check if this is an LSB message (skip printing)
+        is_lsb_hires = False
+        if self.csv_parser and msg.type == 'control_change' and 32 <= msg.control <= 63:
+            func_info = self.csv_parser.lookup_function(msg)
+            if func_info and func_info.get('type') == 'KnobSliderHiRes':
+                is_lsb_hires = True
+
         colored, plain = self.format_message(msg, direction)
 
         # Non-grouped mode: print immediately (original behavior)
         if not self.enable_grouping:
+            # Skip LSB messages entirely (even in non-grouped mode)
+            if is_lsb_hires:
+                return
             print(colored)
             if self.log_handle:
                 self.log_handle.write(plain + "\n")
@@ -416,6 +430,35 @@ class RekordboxMIDISniffer:
         else:
             # Flush previous group (if any)
             self._flush_group()
+
+            # Handle LSB messages - create pending group if none exists
+            if is_lsb_hires:
+                func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
+                if func_info and func_info.get('type') == 'KnobSliderHiRes':
+                    norm_cc = msg.control if msg.control < 32 else msg.control - 32
+
+                    # Create pending group for orphaned LSB (arrives before MSB)
+                    if not self.current_group:
+                        self.current_group = {
+                            'msg': msg,
+                            'func_info': func_info,
+                            'direction': direction,
+                            'plain_output': plain,
+                            'colored_output': colored,
+                            'msb_values': {},
+                            'lsb_values': {}
+                        }
+                        self.group_count = 1
+                        self.last_display_update = time.time()
+
+                    # Track the LSB value
+                    if 'lsb_values' not in self.current_group:
+                        self.current_group['lsb_values'] = {}
+                    self.current_group['lsb_values'][norm_cc] = msg.value
+
+                    # Update display with current value (MSB will be 0 until it arrives)
+                    self._update_group_display()
+                return
 
             # Start new group
             func_info = self.csv_parser.lookup_function(msg) if self.csv_parser else None
@@ -494,7 +537,7 @@ class RekordboxMIDISniffer:
             colored_cleaned = re.sub(r'\s+val=\d+', '', colored)
             plain_cleaned = re.sub(r'\s+val=\d+', '', plain)
 
-            # Determine if this is a hi-res control with both MSB and LSB
+            # Determine if this is a hi-res control
             func_info = self.current_group.get('func_info')
             display_value = msg.value
             max_val = 127
@@ -504,10 +547,9 @@ class RekordboxMIDISniffer:
                 msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
                 lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
 
-                if norm_cc in self.current_group.get('msb_values', {}) and \
-                   norm_cc in self.current_group.get('lsb_values', {}):
-                    display_value = msb_val * 128 + lsb_val
-                    max_val = 16383
+                # Always show combined value for hi-res (use 0 as fallback for missing LSB)
+                display_value = msb_val * 128 + lsb_val
+                max_val = 16383
 
             # Build replacement: "(xNNN) val: XX" with color-mapped value
             counter_text = f" (x{self.group_count})"
@@ -620,7 +662,7 @@ class RekordboxMIDISniffer:
                 # Remove existing "val=XX"
                 plain = re.sub(r'\s+val=\d+', '', plain)
 
-                # Determine if this is a hi-res control with both MSB and LSB
+                # Determine if this is a hi-res control
                 func_info = self.current_group.get('func_info')
                 display_value = msg.value
 
@@ -628,10 +670,8 @@ class RekordboxMIDISniffer:
                     norm_cc = msg.control if msg.control < 32 else msg.control - 32
                     msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
                     lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
-
-                    if norm_cc in self.current_group.get('msb_values', {}) and \
-                       norm_cc in self.current_group.get('lsb_values', {}):
-                        display_value = msb_val * 128 + lsb_val
+                    # Always show combined value for hi-res
+                    display_value = msb_val * 128 + lsb_val
 
                 # Add new format with combined value
                 plain += f" (x{self.group_count}) val: {display_value}"
