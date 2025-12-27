@@ -116,7 +116,9 @@ class RekordboxMIDISniffer:
                 func_str_colored = click.style(raw, fg='white', dim=True) if self.use_colors else raw
                 func_str_plain = raw
         else:
-            func_str_colored, func_str_plain = self._format_function(msg)
+            # Skip adding val=XX for control_change when grouping (we'll add it properly in _flush_group)
+            skip_value = self.enable_grouping and msg.type == 'control_change'
+            func_str_colored, func_str_plain = self._format_function(msg, skip_value=skip_value)
 
         parts_colored.append(func_str_colored)
         parts_plain.append(func_str_plain)
@@ -219,8 +221,12 @@ class RekordboxMIDISniffer:
         plain = " ".join(bytes_list)
         return colored, plain
 
-    def _format_function(self, msg: mido.Message) -> Tuple[str, str]:
-        """Format Rekordbox function name with details"""
+    def _format_function(self, msg: mido.Message, skip_value: bool = False) -> Tuple[str, str]:
+        """Format Rekordbox function name with details
+
+        Args:
+            skip_value: If True, don't include val=XX (for grouped messages)
+        """
         if not self.csv_parser:
             raw = self._format_raw_message(msg)
             return (click.style(raw, fg='white', dim=True) if self.use_colors else raw), raw
@@ -285,8 +291,8 @@ class RekordboxMIDISniffer:
                 parts_plain.append(release_str)
                 parts_colored.append(click.style(release_str, fg='red', dim=True) if self.use_colors else release_str)
 
-        # Add value for CC messages
-        if msg.type == 'control_change':
+        # Add value for CC messages (skip if requested, e.g., for grouped messages)
+        if msg.type == 'control_change' and not skip_value:
             val_str = f"val={msg.value}"
             parts_plain.append(val_str)
             parts_colored.append(click.style(val_str, fg='bright_white') if self.use_colors else val_str)
@@ -585,13 +591,8 @@ class RekordboxMIDISniffer:
         plain = self.current_group['plain_output']
         msg = self.current_group['msg']
 
-        # For grouped messages, add count and final value
-        if self.group_count > 1:
-            # Remove existing "val=XX" if present
-            colored = re.sub(r'\s+val=\d+', '', colored)
-            plain = re.sub(r'\s+val=\d+', '', plain)
-
-            # Determine if this is a hi-res control
+        # For grouped messages OR control_change in grouped mode, add count and value
+        if self.group_count > 1 or (self.enable_grouping and msg.type == 'control_change'):
             func_info = self.current_group.get('func_info')
             display_value = msg.value
             max_val = 127
@@ -604,24 +605,34 @@ class RekordboxMIDISniffer:
                 display_value = msb_val * 128 + lsb_val
                 max_val = 16383
 
-            # Build suffix: "(xNNN) val: XX" or just "(xNNN)"
-            counter_text = f" (x{self.group_count})"
+            # Build suffix: "(xNNN) val: XX" or just "val: XX" for single messages
+            if self.group_count > 1:
+                counter_text = f" (x{self.group_count})"
+            else:
+                counter_text = ""
 
             if msg.type == 'control_change':
                 value_text = f" val: {display_value}"
                 plain_suffix = counter_text + value_text
 
                 if self.use_colors:
-                    counter_colored = click.style(counter_text, fg='white', dim=True)
+                    if counter_text:
+                        counter_colored = click.style(counter_text, fg='white', dim=True)
+                    else:
+                        counter_colored = ""
                     value_color = self._value_to_color(display_value, 0, max_val)
                     value_colored = " val: " + click.style(str(display_value), fg=value_color, bold=True)
                     colored_suffix = counter_colored + value_colored
                 else:
                     colored_suffix = plain_suffix
             else:
-                # Non-CC messages (buttons, etc.) - just counter
-                plain_suffix = counter_text
-                colored_suffix = click.style(counter_text, fg='white', dim=True) if self.use_colors else counter_text
+                # Non-CC messages (buttons, etc.) - just counter if grouped
+                if counter_text:
+                    colored_suffix = click.style(counter_text, fg='white', dim=True) if self.use_colors else counter_text
+                    plain_suffix = counter_text
+                else:
+                    colored_suffix = ""
+                    plain_suffix = ""
 
             colored = colored + colored_suffix
             plain = plain + plain_suffix
