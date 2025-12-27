@@ -46,9 +46,8 @@ class RekordboxMIDISniffer:
         self.enable_grouping = enable_grouping
         self.current_group: Optional[Dict] = None  # Active grouped message
         self.group_count: int = 0  # Counter for grouped messages
-        self.last_output_length: int = 0  # Track line length for \r overwrites
-        self.last_display_update: float = 0.0  # Timestamp for throttling updates
-        self.display_throttle_ms: int = 250  # Throttle display updates (prevent flicker)
+        self.group_start_time: float = 0.0  # When the current group started
+        self.group_window_ms: int = 500  # Group window in milliseconds
 
         if log_file:
             try:
@@ -397,12 +396,17 @@ class RekordboxMIDISniffer:
                 self.log_handle.flush()
             return
 
-        # Grouped mode: check if message can be grouped
-        if self._should_group(msg, direction):
-            # Increment counter for this group
-            self.group_count += 1
+        # Grouped mode with 500ms window
+        now = time.time()
 
-            # Update latest message in group (for final value display)
+        # Check if current group window expired
+        if self.current_group and (now - self.group_start_time) >= (self.group_window_ms / 1000):
+            self._flush_group()
+
+        # Check if message can be grouped with current group
+        if self._should_group(msg, direction):
+            # Add to current group
+            self.group_count += 1
             self.current_group['msg'] = msg
             self.current_group['plain_output'] = plain
             self.current_group['colored_output'] = colored
@@ -421,14 +425,8 @@ class RekordboxMIDISniffer:
                         self.current_group['msb_values'][norm_cc] = msg.value
                     else:
                         self.current_group['lsb_values'][norm_cc] = msg.value
-
-            # Throttled display update (prevent jog wheel flicker)
-            now = time.time()
-            if now - self.last_display_update >= (self.display_throttle_ms / 1000):
-                self._update_group_display()
-                self.last_display_update = now
         else:
-            # Flush previous group (if any)
+            # Different message - flush current group and start new one
             self._flush_group()
 
             # Handle LSB messages - create pending group if none exists
@@ -449,15 +447,12 @@ class RekordboxMIDISniffer:
                             'lsb_values': {}
                         }
                         self.group_count = 1
-                        self.last_display_update = time.time()
+                        self.group_start_time = now
 
                     # Track the LSB value
                     if 'lsb_values' not in self.current_group:
                         self.current_group['lsb_values'] = {}
                     self.current_group['lsb_values'][norm_cc] = msg.value
-
-                    # Update display with current value (MSB will be 0 until it arrives)
-                    self._update_group_display()
                 return
 
             # Start new group
@@ -470,10 +465,7 @@ class RekordboxMIDISniffer:
                 'colored_output': colored
             }
             self.group_count = 1
-            self.last_display_update = time.time()
-
-            # Display new group immediately
-            self._update_group_display()
+            self.group_start_time = now
 
     def monitor(self, input_port: mido.ports.BaseInput, direction: str = "IN"):
         """Monitor MIDI port in real-time"""
@@ -482,9 +474,13 @@ class RekordboxMIDISniffer:
                 self.print_message(msg, direction)
         except KeyboardInterrupt:
             pass
+        finally:
+            # Flush any pending group on exit
+            self._flush_group()
 
     def close(self):
-        """Close log file"""
+        """Close log file and flush pending groups"""
+        self._flush_group()
         if self.log_handle:
             self.log_handle.close()
 
@@ -515,74 +511,6 @@ class RekordboxMIDISniffer:
             return 'magenta'
         else:  # 103-127: red (high)
             return 'red'
-
-    def _update_group_display(self):
-        """
-        Update console with current group count (throttled to prevent flicker)
-
-        Uses \\r (carriage return) to overwrite current line.
-        Format: "[Status] (x502) val: 59" with color-mapped value
-        For hi-res controls with MSB/LSB, displays combined 14-bit value (0-16383).
-        """
-        if not self.current_group:
-            return
-
-        colored = self.current_group['colored_output']
-        plain = self.current_group['plain_output']
-        msg = self.current_group['msg']
-
-        # For control_change messages with grouping, replace "val=XX" format
-        if msg.type == 'control_change' and self.group_count > 1:
-            # Remove "val=XX" from base output (we'll replace it)
-            colored_cleaned = re.sub(r'\s+val=\d+', '', colored)
-            plain_cleaned = re.sub(r'\s+val=\d+', '', plain)
-
-            # Determine if this is a hi-res control
-            func_info = self.current_group.get('func_info')
-            display_value = msg.value
-            max_val = 127
-
-            if func_info and func_info.get('type') == 'KnobSliderHiRes':
-                norm_cc = msg.control if msg.control < 32 else msg.control - 32
-                msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
-                lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
-
-                # Always show combined value for hi-res (use 0 as fallback for missing LSB)
-                display_value = msb_val * 128 + lsb_val
-                max_val = 16383
-
-            # Build replacement: "(xNNN) val: XX" with color-mapped value
-            counter_text = f" (x{self.group_count})"
-            value_text = f" val: {display_value}"
-
-            plain_suffix = counter_text + value_text
-
-            if self.use_colors:
-                counter_colored = click.style(counter_text, fg='white', dim=True)
-                value_color = self._value_to_color(display_value, 0, max_val)
-                value_colored = " val: " + click.style(str(display_value), fg=value_color, bold=True)
-                colored_suffix = counter_colored + value_colored
-            else:
-                colored_suffix = plain_suffix
-
-            colored_output = colored_cleaned + colored_suffix
-            plain_output = plain_cleaned + plain_suffix
-
-        else:
-            colored_output = colored
-            plain_output = plain
-
-        # Overwrite current line with \r
-        output = f"\r{colored_output}"
-        output_len = len(plain_output)
-
-        if output_len < self.last_output_length:
-            output += " " * (self.last_output_length - output_len)
-
-        sys.stdout.write(output)
-        sys.stdout.flush()
-
-        self.last_output_length = output_len
 
     def _should_group(self, msg: mido.Message, direction: str) -> bool:
         """
@@ -643,54 +571,73 @@ class RekordboxMIDISniffer:
 
     def _flush_group(self):
         """
-        Finalize current group and write to log file
+        Finalize current group and output it
 
         Called when:
         - New message doesn't match current group
+        - Group window expires (500ms)
         - Monitoring stops (Ctrl+C, port close)
         """
         if not self.current_group or self.group_count == 0:
             return
 
-        # Write grouped message to log file (once, with final counter and value)
+        colored = self.current_group['colored_output']
+        plain = self.current_group['plain_output']
+        msg = self.current_group['msg']
+
+        # For grouped messages, add count and final value
+        if self.group_count > 1:
+            # Remove existing "val=XX" if present
+            colored = re.sub(r'\s+val=\d+', '', colored)
+            plain = re.sub(r'\s+val=\d+', '', plain)
+
+            # Determine if this is a hi-res control
+            func_info = self.current_group.get('func_info')
+            display_value = msg.value
+            max_val = 127
+
+            if func_info and func_info.get('type') == 'KnobSliderHiRes':
+                norm_cc = msg.control if msg.control < 32 else msg.control - 32
+                msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
+                lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
+                # Always show combined value for hi-res
+                display_value = msb_val * 128 + lsb_val
+                max_val = 16383
+
+            # Build suffix: "(xNNN) val: XX" or just "(xNNN)"
+            counter_text = f" (x{self.group_count})"
+
+            if msg.type == 'control_change':
+                value_text = f" val: {display_value}"
+                plain_suffix = counter_text + value_text
+
+                if self.use_colors:
+                    counter_colored = click.style(counter_text, fg='white', dim=True)
+                    value_color = self._value_to_color(display_value, 0, max_val)
+                    value_colored = " val: " + click.style(str(display_value), fg=value_color, bold=True)
+                    colored_suffix = counter_colored + value_colored
+                else:
+                    colored_suffix = plain_suffix
+            else:
+                # Non-CC messages (buttons, etc.) - just counter
+                plain_suffix = counter_text
+                colored_suffix = click.style(counter_text, fg='white', dim=True) if self.use_colors else counter_text
+
+            colored = colored + colored_suffix
+            plain = plain + plain_suffix
+
+        # Print the grouped message
+        print(colored)
+
+        # Write to log file
         if self.log_handle:
-            plain = self.current_group['plain_output']
-            msg = self.current_group['msg']
-
-            # For control_change with grouping, use new format: "(xNNN) val: XX"
-            if msg.type == 'control_change' and self.group_count > 1:
-                # Remove existing "val=XX"
-                plain = re.sub(r'\s+val=\d+', '', plain)
-
-                # Determine if this is a hi-res control
-                func_info = self.current_group.get('func_info')
-                display_value = msg.value
-
-                if func_info and func_info.get('type') == 'KnobSliderHiRes':
-                    norm_cc = msg.control if msg.control < 32 else msg.control - 32
-                    msb_val = self.current_group.get('msb_values', {}).get(norm_cc, 0)
-                    lsb_val = self.current_group.get('lsb_values', {}).get(norm_cc, 0)
-                    # Always show combined value for hi-res
-                    display_value = msb_val * 128 + lsb_val
-
-                # Add new format with combined value
-                plain += f" (x{self.group_count}) val: {display_value}"
-            elif self.group_count > 1:
-                # Non-CC messages (buttons, etc.) - just add counter
-                plain += f" (x{self.group_count})"
-
             self.log_handle.write(plain + "\n")
             self.log_handle.flush()
-
-        # Print newline to finalize console output
-        if self.enable_grouping:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
 
         # Reset group state
         self.current_group = None
         self.group_count = 0
-        self.last_output_length = 0
+        self.group_start_time = 0.0
 
 
 def scan_midi_ports() -> Tuple[List[str], List[str]]:
