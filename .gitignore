@@ -220,6 +220,10 @@ __marimo__/
 rekordbox_midi_*.log
 commits-imported.txt
 tasks/
+test_rgb_colors.py
+RGB_COLORING_EXPERIMENT.md
+repomix-output.xml
+.claude/kb/
 
 # Temporary and backup files
 *.tmp
